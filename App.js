@@ -9,11 +9,6 @@ import AnchorClassScreen from './screens/AnchorClassScreen';
 
 import { initDB } from './database';
 import { registerBackgroundValidationTask } from './backgroundEngine';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import HomeScreen from './screens/HomeScreen';
-import TimetableScreen from './screens/TimetableScreen';
-import UploadTimetableScreen from './screens/UploadTimetableScreen';
-import AnchorClassScreen from './screens/AnchorClassScreen';
 
 const Stack = createNativeStackNavigator();
 

@@ -9,9 +9,16 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.swaroop.smartattendance",
+      "infoPlist": {
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Allow SmartAttendance to detect your classroom location even when the app is in the background.",
+        "NSLocationWhenInUseUsageDescription": "Allow SmartAttendance to detect your classroom location to verify attendance.",
+        "UIBackgroundModes": ["location", "fetch"]
+      }
     },
     "android": {
+      "package": "com.swaroop.smartattendance",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -19,14 +26,19 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "POST_NOTIFICATIONS"
+      ]
     },
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "expo-router",
       [
         "expo-splash-screen",
         {
@@ -39,11 +51,23 @@
           }
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "locationAlwaysPermission": "Allow SmartAttendance to detect your classroom location even when the app is in the background."
+        }
+      ],
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "2b0c26ec-e02e-4e13-9b55-7b12a0bf1548"
+      }
     }
   }
 }
