@@ -6,7 +6,7 @@
 
 // ⚠️ IMPORTANT: Replace this with your actual Gemini API key
 // Get one free at: https://aistudio.google.com/apikey
-const GEMINI_API_KEY = 'YOUR_API_KEY_HERE';
+const GEMINI_API_KEY = 'AIzaSyC6C5Qg28eX1WS2w-a5gIDY91ogPkxBZ8o';
 
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 

@@ -54,3 +54,68 @@ export const initDB = () => {
 export const getDBConnection = () => {
   return db;
 };
+
+/**
+ * Updates a class row with its anchored GPS coordinates and Wi-Fi signature.
+ * @param {string} className - The name of the class to update
+ * @param {number} lat - Latitude of the anchored location
+ * @param {number} lng - Longitude of the anchored location
+ * @param {string} wifi - Wi-Fi IP or BSSID signature
+ */
+export const updateClassAnchor = (className, lat, lng, wifi) => {
+  try {
+    db.runSync(
+      `UPDATE classes SET anchor_lat = ?, anchor_lng = ?, anchor_wifi_bssid = ? WHERE name = ?`,
+      [lat, lng, wifi, className]
+    );
+    console.log(`Anchor saved for class: ${className} at (${lat}, ${lng})`);
+  } catch (error) {
+    console.error("Error updating class anchor:", error);
+    throw error;
+  }
+};
+
+/**
+ * Finds a class that is currently active based on day and time.
+ * Returns the first matching class row or null.
+ * @param {string} dayOfWeek - e.g. "Monday"
+ * @param {string} currentTime - e.g. "09:05" in HH:mm format
+ * @returns {object|null}
+ */
+export const getActiveClass = (dayOfWeek, currentTime) => {
+  try {
+    const result = db.getFirstSync(
+      `SELECT * FROM classes 
+       WHERE day_of_week = ? 
+       AND start_time <= ? 
+       AND end_time >= ?
+       AND anchor_lat IS NOT NULL 
+       AND anchor_lng IS NOT NULL`,
+      [dayOfWeek, currentTime, currentTime]
+    );
+    return result || null;
+  } catch (error) {
+    console.error("Error querying active class:", error);
+    return null;
+  }
+};
+
+/**
+ * Checks if attendance has already been marked for a class today.
+ * Prevents duplicate "Present" entries in the same day.
+ * @param {number} classId
+ * @param {string} todayDate - e.g. "2026-03-12"
+ * @returns {boolean}
+ */
+export const isAlreadyMarked = (classId, todayDate) => {
+  try {
+    const result = db.getFirstSync(
+      `SELECT id FROM attendance_logs WHERE class_id = ? AND date = ?`,
+      [classId, todayDate]
+    );
+    return !!result;
+  } catch (error) {
+    console.error("Error checking attendance:", error);
+    return false;
+  }
+};

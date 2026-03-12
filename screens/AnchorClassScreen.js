@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import * as Location from 'expo-location';
 import * as Network from 'expo-network';
+import { updateClassAnchor } from '../database';
 
 export default function AnchorClassScreen({ navigation, route }) {
-  // Normally route.params.classId would be passed to tie this anchor to a class
   const classId = route?.params?.classId || "Sample Class";
   
   const [isAnchoring, setIsAnchoring] = useState(false);
@@ -40,9 +40,6 @@ export default function AnchorClassScreen({ navigation, route }) {
       // 4. Get Wi-Fi Information
       let networkState = await Network.getNetworkStateAsync();
       let ip = await Network.getIpAddressAsync();
-      // Note: expo-network doesn't natively expose BSSID on all platforms without ejecting. 
-      // For a managed Expo flow, we track the IP state as a basic network check.
-      // In a production bare workflow, we'd use react-native-wifi-reborn to strictly grab the BSSID mac address.
 
       const anchorResult = {
         lat: location.coords.latitude,
@@ -53,15 +50,22 @@ export default function AnchorClassScreen({ navigation, route }) {
         ip: ip
       };
 
+      // 5. Save to SQLite Database
+      const wifiSignature = anchorResult.isWifi ? anchorResult.ip : 'no-wifi';
+      updateClassAnchor(classId, anchorResult.lat, anchorResult.lng, wifiSignature);
+
       setAnchorData(anchorResult);
       
       Alert.alert(
-        "Successfully Anchored",
-        `Location set for ${classId}.\nLat: ${anchorResult.lat.toFixed(4)}\nLng: ${anchorResult.lng.toFixed(4)}\nWi-Fi: ${anchorResult.isWifi ? 'Yes' : 'No'}`,
+        "✅ Successfully Anchored",
+        `Location saved for "${classId}".\n\n` +
+        `📍 Lat: ${anchorResult.lat.toFixed(6)}\n` +
+        `📍 Lng: ${anchorResult.lng.toFixed(6)}\n` +
+        `📶 Wi-Fi: ${anchorResult.isWifi ? 'Connected' : 'Not connected'}\n` +
+        `🎯 Accuracy: ${anchorResult.accuracy.toFixed(1)}m\n\n` +
+        `Future attendance for this class will be verified automatically using this anchor.`,
         [{ text: "Done", onPress: () => navigation.goBack() }]
       );
-      
-      // Here you would save anchorResult to Firebase tied to this user and classId
 
     } catch (error) {
       Alert.alert('Error', error.message);
@@ -83,6 +87,16 @@ export default function AnchorClassScreen({ navigation, route }) {
         <Text style={styles.className}>{classId}</Text>
       </View>
 
+      {anchorData && (
+        <View style={styles.savedBox}>
+          <Text style={styles.savedTitle}>✅ Anchor Saved</Text>
+          <Text style={styles.savedDetail}>Lat: {anchorData.lat.toFixed(6)}</Text>
+          <Text style={styles.savedDetail}>Lng: {anchorData.lng.toFixed(6)}</Text>
+          <Text style={styles.savedDetail}>Wi-Fi: {anchorData.isWifi ? 'Yes' : 'No'}</Text>
+          <Text style={styles.savedDetail}>Accuracy: {anchorData.accuracy.toFixed(1)}m</Text>
+        </View>
+      )}
+
       <TouchableOpacity 
         style={[styles.button, isAnchoring && styles.buttonDisabled]} 
         onPress={performAnchoring}
@@ -91,7 +105,9 @@ export default function AnchorClassScreen({ navigation, route }) {
         {isAnchoring ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.buttonText}>Drop Anchor Pin 📍</Text>
+          <Text style={styles.buttonText}>
+            {anchorData ? 'Re-Anchor 📍' : 'Drop Anchor Pin 📍'}
+          </Text>
         )}
       </TouchableOpacity>
     </View>
@@ -115,7 +131,7 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     color: '#666',
-    marginBottom: 40,
+    marginBottom: 30,
     lineHeight: 24,
     textAlign: 'center',
     paddingHorizontal: 10,
@@ -125,7 +141,7 @@ const styles = StyleSheet.create({
     padding: 20,
     borderRadius: 12,
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: 20,
     borderWidth: 1,
     borderColor: '#eee',
   },
@@ -138,6 +154,25 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: 'bold',
     color: '#007AFF',
+  },
+  savedBox: {
+    backgroundColor: '#e8f5e9',
+    padding: 15,
+    borderRadius: 12,
+    marginBottom: 30,
+    borderWidth: 1,
+    borderColor: '#c8e6c9',
+  },
+  savedTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#2e7d32',
+    marginBottom: 8,
+  },
+  savedDetail: {
+    fontSize: 14,
+    color: '#555',
+    marginBottom: 2,
   },
   button: {
     backgroundColor: '#007AFF',
