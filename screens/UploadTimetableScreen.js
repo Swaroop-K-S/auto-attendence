@@ -75,7 +75,7 @@ export default function UploadTimetableScreen({ navigation }) {
         )}
       </TouchableOpacity>
       
-      <TouchableOpacity style={styles.textButton} onPress={() => {Alert.alert("Coming Soon", "Manual entry UI will go here.")}}>
+      <TouchableOpacity style={styles.textButton} onPress={() => navigation.navigate('ManualEntry')}>
         <Text style={styles.textButtonText}>Enter manually instead</Text>
       </TouchableOpacity>
     </View>

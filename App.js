@@ -6,6 +6,7 @@ import HomeScreen from './screens/HomeScreen';
 import TimetableScreen from './screens/TimetableScreen';
 import UploadTimetableScreen from './screens/UploadTimetableScreen';
 import AnchorClassScreen from './screens/AnchorClassScreen';
+import ManualEntryScreen from './screens/ManualEntryScreen';
 
 import { initDB } from './database';
 import { registerBackgroundValidationTask } from './backgroundEngine';
@@ -29,6 +30,7 @@ export default function App() {
         <Stack.Screen name="Timetable" component={TimetableScreen} options={{ title: 'My Schedule' }} />
         <Stack.Screen name="Upload" component={UploadTimetableScreen} options={{ title: 'Upload Schedule' }} />
         <Stack.Screen name="Anchor" component={AnchorClassScreen} options={{ title: 'Anchor Class Location' }} />
+        <Stack.Screen name="ManualEntry" component={ManualEntryScreen} options={{ title: 'Add Class' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );
