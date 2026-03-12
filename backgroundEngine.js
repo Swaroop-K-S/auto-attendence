@@ -3,7 +3,7 @@ import * as BackgroundFetch from 'expo-background-fetch';
 import * as Location from 'expo-location';
 import * as Network from 'expo-network';
 import * as Notifications from 'expo-notifications';
-import { getDBConnection, getActiveClass, isAlreadyMarked } from './database';
+import { getDBConnection, getActiveClass, isAlreadyMarked, getAttendanceLog, updateLastVerified, updateAttendanceExitStatus } from './database';
 
 const BACKGROUND_VALIDATION_TASK = 'BACKGROUND_ATTENDANCE_VALIDATION_TASK';
 
@@ -61,18 +61,45 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
     const activeClass = getActiveClass(currentDay, currentTime);
 
     if (!activeClass) {
-      // No class right now. Immediately sleep to save battery.
       console.log("[BG Engine] No active class found. Sleeping.");
       return BackgroundFetch.BackgroundFetchResult.NoData;
     }
 
-    console.log(`[BG Engine] Active class found: ${activeClass.name}`);
+    console.log(`[BG Engine] Active class found: ${activeClass.name} (${activeClass.class_type || 'theory'})`);
 
     // 3. Check if we've already marked attendance for this class today
     if (isAlreadyMarked(activeClass.id, todayDate)) {
-      console.log(`[BG Engine] Attendance already marked for ${activeClass.name} today.`);
+      // ── Early Leave Detection ──────────────────────────────────────
+      // Re-verify: Is the student STILL in the classroom?
+      const existingLog = getAttendanceLog(activeClass.id, todayDate);
+      if (existingLog && existingLog.status === 'Present') {
+        try {
+          const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          const distance = getDistance(
+            location.coords.latitude, location.coords.longitude,
+            activeClass.anchor_lat, activeClass.anchor_lng
+          );
+
+          if (distance < 100) {
+            // Still in class — update last verified timestamp
+            updateLastVerified(existingLog.id);
+            console.log(`[BG Engine] Still in class: ${activeClass.name} (${distance.toFixed(0)}m)`);
+          } else {
+            // Left early!
+            updateAttendanceExitStatus(existingLog.id, 'Left Early');
+            await sendNotification(
+              "🚶 Early Leave Detected",
+              `You appear to have left ${activeClass.name} early. Distance: ${distance.toFixed(0)}m`
+            );
+            console.log(`[BG Engine] EARLY LEAVE: ${activeClass.name} (${distance.toFixed(0)}m)`);
+          }
+        } catch (locErr) {
+          console.log("[BG Engine] Could not re-verify location:", locErr);
+        }
+      }
       return BackgroundFetch.BackgroundFetchResult.NoData;
     }
+
 
     // 4. Get current GPS location
     const location = await Location.getCurrentPositionAsync({

@@ -10,7 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform
 } from 'react-native';
-import { getDBConnection } from '../database';
+import { saveUserClass } from '../database';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -20,6 +20,7 @@ export default function ManualEntryScreen({ navigation }) {
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('10:00');
   const [room, setRoom] = useState('');
+  const [classType, setClassType] = useState('theory');
 
   const handleSave = () => {
     if (!name || !startTime || !endTime) {
@@ -35,13 +36,16 @@ export default function ManualEntryScreen({ navigation }) {
     }
 
     try {
-      const db = getDBConnection();
-      db.runSync(
-        `INSERT INTO classes (name, day_of_week, start_time, end_time, room_name) VALUES (?, ?, ?, ?, ?)`,
-        [name, day, startTime, endTime, room]
-      );
+      saveUserClass({
+        name,
+        day_of_week: day,
+        start_time: startTime,
+        end_time: endTime,
+        room_name: room,
+        class_type: classType,
+      });
 
-      Alert.alert("Success", "Class added successfully!", [
+      Alert.alert("Success", `${classType === 'lab' ? '🔬 Lab' : '📖 Theory'} class added successfully!`, [
         { text: "OK", onPress: () => navigation.navigate('Timetable') }
       ]);
     } catch (error) {
@@ -66,6 +70,26 @@ export default function ManualEntryScreen({ navigation }) {
             value={name}
             onChangeText={setName}
           />
+
+          <Text style={styles.label}>Class Type*</Text>
+          <View style={styles.typeContainer}>
+            <TouchableOpacity 
+              style={[styles.typeButton, classType === 'theory' && styles.typeButtonActive]}
+              onPress={() => setClassType('theory')}
+            >
+              <Text style={[styles.typeButtonText, classType === 'theory' && styles.typeButtonTextActive]}>
+                📖 Theory
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.typeButton, classType === 'lab' && styles.typeButtonActiveLab]}
+              onPress={() => setClassType('lab')}
+            >
+              <Text style={[styles.typeButtonText, classType === 'lab' && styles.typeButtonTextActive]}>
+                🔬 Lab
+              </Text>
+            </TouchableOpacity>
+          </View>
 
           <Text style={styles.label}>Day of Week*</Text>
           <View style={styles.daysContainer}>
@@ -202,5 +226,35 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  typeContainer: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+  },
+  typeButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#f0f0f0',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  typeButtonActive: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  typeButtonActiveLab: {
+    backgroundColor: '#ff9800',
+    borderColor: '#ff9800',
+  },
+  typeButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#666',
+  },
+  typeButtonTextActive: {
+    color: '#fff',
   },
 });
