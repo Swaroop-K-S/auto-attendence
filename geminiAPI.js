@@ -18,11 +18,16 @@ Return ONLY a valid JSON array. Each object must have these exact keys:
 - "start_time": Start time in 24-hour "HH:mm" format (string)
 - "end_time": End time in 24-hour "HH:mm" format (string)  
 - "room": The room number or location if visible, otherwise empty string (string)
+- "type": Either "lab" or "theory" (string). Use these rules to classify:
+  * "lab" — if the name contains keywords like: Lab, Practical, P-, L-, Workshop, Studio, Sessional, or if the room mentions "Lab"
+  * "theory" — for all other classes (lectures, tutorials, seminars)
+  * When in doubt, default to "theory"
 
 Example output:
 [
-  {"name": "Computer Networks", "day": "Monday", "start_time": "09:00", "end_time": "10:00", "room": "B108"},
-  {"name": "Machine Learning Lab", "day": "Monday", "start_time": "11:15", "end_time": "13:15", "room": "Lab B1"}
+  {"name": "Computer Networks", "day": "Monday", "start_time": "09:00", "end_time": "10:00", "room": "B108", "type": "theory"},
+  {"name": "Machine Learning Lab", "day": "Monday", "start_time": "11:15", "end_time": "13:15", "room": "Lab B1", "type": "lab"},
+  {"name": "P-Data Structures", "day": "Tuesday", "start_time": "14:00", "end_time": "16:00", "room": "CS Lab 2", "type": "lab"}
 ]
 
 IMPORTANT RULES:
@@ -30,7 +35,8 @@ IMPORTANT RULES:
 2. If time is in 12-hour format, convert to 24-hour.
 3. Extract every single class from every day visible in the timetable.
 4. If a class spans multiple days, create separate entries for each day.
-5. If you cannot read a field clearly, make your best guess.`;
+5. If you cannot read a field clearly, make your best guess.
+6. Pay special attention to classifying labs correctly — labs typically have longer durations (2-3 hours) and contain keywords listed above.`;
 
 /**
  * Sends a base64 image to Gemini Vision API and returns parsed timetable data.
@@ -105,6 +111,9 @@ export async function parseTimetableImage(base64Image, mimeType = 'image/jpeg') 
   const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
+  // Keywords that indicate a lab/practical class
+  const labKeywords = /\b(lab|practical|p-|l-|workshop|studio|sessional)\b/i;
+
   return classes.map((cls, index) => {
     const name = cls.name || `Class ${index + 1}`;
     const day = validDays.find(d => d.toLowerCase() === (cls.day || '').toLowerCase()) || 'Monday';
@@ -112,6 +121,14 @@ export async function parseTimetableImage(base64Image, mimeType = 'image/jpeg') 
     const end_time = timeRegex.test(cls.end_time) ? cls.end_time : '10:00';
     const room = cls.room || '';
 
-    return { name, day, start_time, end_time, room };
+    // Determine class type: trust AI response, but validate & fallback
+    let type = 'theory';
+    if (cls.type === 'lab' || cls.type === 'theory') {
+      type = cls.type;
+    } else if (labKeywords.test(name) || labKeywords.test(room)) {
+      type = 'lab';
+    }
+
+    return { name, day, start_time, end_time, room, type };
   });
 }

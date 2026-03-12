@@ -113,8 +113,8 @@ export default function UploadTimetableScreen({ navigation }) {
       let savedCount = 0;
       for (const cls of extractedClasses) {
         db.runSync(
-          `INSERT INTO classes (name, day_of_week, start_time, end_time, room_name) VALUES (?, ?, ?, ?, ?)`,
-          [cls.name, cls.day, cls.start_time, cls.end_time, cls.room]
+          `INSERT INTO classes (name, day_of_week, start_time, end_time, room_name, class_type) VALUES (?, ?, ?, ?, ?, ?)`,
+          [cls.name, cls.day, cls.start_time, cls.end_time, cls.room, cls.type || 'theory']
         );
         savedCount++;
       }
