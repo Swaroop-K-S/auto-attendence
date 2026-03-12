@@ -7,16 +7,38 @@ import { getDBConnection, getActiveClass, isAlreadyMarked, getAttendanceLog, upd
 
 const BACKGROUND_VALIDATION_TASK = 'BACKGROUND_ATTENDANCE_VALIDATION_TASK';
 
+// ═══════════════════════════════════════════════════════════════════════
+// Distance Thresholds (meters)
+// ═══════════════════════════════════════════════════════════════════════
+// Labs have stricter thresholds because indoor GPS drift is higher in
+// enclosed lab environments with more electronic interference.
+const THRESHOLDS = {
+  theory: {
+    presentRadius: 50,       // Mark present if within 50m
+    earlyLeaveRadius: 100,   // Flag early leave if beyond 100m during session
+    accuracy: Location.Accuracy.Balanced,
+  },
+  lab: {
+    presentRadius: 35,       // Labs require closer proximity (35m)
+    earlyLeaveRadius: 60,    // Stricter early leave check (60m)
+    accuracy: Location.Accuracy.High,  // Higher accuracy for labs
+  },
+};
+
+/**
+ * Gets the appropriate threshold config based on class type.
+ * @param {string} classType - 'lab' or 'theory'
+ * @returns {object} threshold config
+ */
+function getThreshold(classType) {
+  return THRESHOLDS[classType] || THRESHOLDS.theory;
+}
+
 /**
  * Haversine Formula: Calculates the distance in meters between two GPS coordinates.
- * @param {number} lat1 - Latitude of point 1
- * @param {number} lon1 - Longitude of point 1
- * @param {number} lat2 - Latitude of point 2
- * @param {number} lon2 - Longitude of point 2
- * @returns {number} Distance in meters
  */
 function getDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371000; // Earth's radius in meters
+  const R = 6371000;
   const toRad = (deg) => (deg * Math.PI) / 180;
 
   const dLat = toRad(lat2 - lat1);
@@ -28,91 +50,73 @@ function getDistance(lat1, lon1, lat2, lon2) {
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return R * c; // Distance in meters
+  return R * c;
 }
 
 /**
- * Sends a local notification to the user.
- * @param {string} title 
- * @param {string} body 
+ * Sends a local notification immediately.
  */
 async function sendNotification(title, body) {
   await Notifications.scheduleNotificationAsync({
     content: { title, body },
-    trigger: null, // Fire immediately
+    trigger: null,
   });
 }
 
-// 1. Define the Background Task
+/**
+ * Checks Wi-Fi match against the anchored signature.
+ * Returns true if Wi-Fi matches, false otherwise.
+ */
+async function checkWifiMatch(anchorWifi) {
+  try {
+    if (!anchorWifi || anchorWifi === 'no-wifi') return false;
+    const networkState = await Network.getNetworkStateAsync();
+    const ip = await Network.getIpAddressAsync();
+    return networkState.type === 'WIFI' && ip === anchorWifi;
+  } catch (e) {
+    return false;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Background Task Definition
+// ═══════════════════════════════════════════════════════════════════════
 TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
   try {
     const now = new Date();
-    
-    // Get current day and time in correct formats
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const currentDay = days[now.getDay()];
     const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const todayDate = now.toISOString().split('T')[0]; // "2026-03-12"
+    const todayDate = now.toISOString().split('T')[0];
 
-    console.log(`[BG Engine] Checking: ${currentDay} ${currentTime}`);
+    console.log(`[BG Engine] ──── Wake-up: ${currentDay} ${currentTime} ────`);
 
-    // 2. Query SQLite for an active class right now
+    // ── Step 1: Find an active class ────────────────────────────────
     const activeClass = getActiveClass(currentDay, currentTime);
 
     if (!activeClass) {
-      console.log("[BG Engine] No active class found. Sleeping.");
+      console.log("[BG Engine] No active class. Sleeping.");
       return BackgroundFetch.BackgroundFetchResult.NoData;
     }
 
-    console.log(`[BG Engine] Active class found: ${activeClass.name} (${activeClass.class_type || 'theory'})`);
+    const classType = activeClass.class_type || 'theory';
+    const threshold = getThreshold(classType);
+    const typeLabel = classType === 'lab' ? '🔬 Lab' : '📖 Theory';
 
-    // 3. Check if we've already marked attendance for this class today
-    if (isAlreadyMarked(activeClass.id, todayDate)) {
-      // ── Early Leave Detection ──────────────────────────────────────
-      // Re-verify: Is the student STILL in the classroom?
-      const existingLog = getAttendanceLog(activeClass.id, todayDate);
-      if (existingLog && existingLog.status === 'Present') {
-        try {
-          const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          const distance = getDistance(
-            location.coords.latitude, location.coords.longitude,
-            activeClass.anchor_lat, activeClass.anchor_lng
-          );
+    console.log(`[BG Engine] Active: ${activeClass.name} (${typeLabel}) | Radius: ${threshold.presentRadius}m present / ${threshold.earlyLeaveRadius}m leave`);
 
-          if (distance < 100) {
-            // Still in class — update last verified timestamp
-            updateLastVerified(existingLog.id);
-            console.log(`[BG Engine] Still in class: ${activeClass.name} (${distance.toFixed(0)}m)`);
-          } else {
-            // Left early!
-            updateAttendanceExitStatus(existingLog.id, 'Left Early');
-            await sendNotification(
-              "🚶 Early Leave Detected",
-              `You appear to have left ${activeClass.name} early. Distance: ${distance.toFixed(0)}m`
-            );
-            console.log(`[BG Engine] EARLY LEAVE: ${activeClass.name} (${distance.toFixed(0)}m)`);
-          }
-        } catch (locErr) {
-          console.log("[BG Engine] Could not re-verify location:", locErr);
-        }
-      }
-      return BackgroundFetch.BackgroundFetchResult.NoData;
-    }
-
-
-    // 4. Get current GPS location
+    // ── Step 2: Get current location ────────────────────────────────
     const location = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced,
+      accuracy: threshold.accuracy,
     });
 
-    // 5. Anti-Spoofing: Check for mock locations
+    // ── Step 3: Anti-Spoofing ───────────────────────────────────────
     if (location.mocked) {
       console.log("[BG Engine] SPOOFING DETECTED!");
       const db = getDBConnection();
       db.runSync(
-        `INSERT INTO attendance_logs (class_id, date, status, marked_at) VALUES (?, ?, ?, ?)`,
-        [activeClass.id, todayDate, 'Spoofed', now.toISOString()]
+        `INSERT INTO attendance_logs (class_id, date, status, marked_at, session_end_status) VALUES (?, ?, ?, ?, ?)`,
+        [activeClass.id, todayDate, 'Spoofed', now.toISOString(), 'Spoofed']
       );
       await sendNotification(
         "⚠️ Spoofing Detected",
@@ -121,51 +125,79 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
       return BackgroundFetch.BackgroundFetchResult.NewData;
     }
 
-    // 6. Calculate distance using Haversine formula
+    // ── Step 4: Calculate distance ──────────────────────────────────
     const distance = getDistance(
-      location.coords.latitude,
-      location.coords.longitude,
-      activeClass.anchor_lat,
-      activeClass.anchor_lng
+      location.coords.latitude, location.coords.longitude,
+      activeClass.anchor_lat, activeClass.anchor_lng
     );
+    const wifiMatch = await checkWifiMatch(activeClass.anchor_wifi_bssid);
 
-    console.log(`[BG Engine] Distance to anchor: ${distance.toFixed(1)}m`);
+    console.log(`[BG Engine] Distance: ${distance.toFixed(1)}m | GPS accuracy: ${location.coords.accuracy?.toFixed(1)}m | Wi-Fi: ${wifiMatch ? '✓' : '✗'}`);
 
     const db = getDBConnection();
 
-    // 7. Check Wi-Fi match (optional secondary verification)
-    let wifiMatch = false;
-    try {
-      const networkState = await Network.getNetworkStateAsync();
-      const ip = await Network.getIpAddressAsync();
-      if (networkState.type === 'WIFI' && activeClass.anchor_wifi_bssid) {
-        wifiMatch = (ip === activeClass.anchor_wifi_bssid);
+    // ── Step 5: Persistent Session Logic ────────────────────────────
+    // Check if we already have an attendance record for this class today
+    const existingLog = getAttendanceLog(activeClass.id, todayDate);
+
+    if (existingLog) {
+      // ─── RE-VERIFICATION (during ongoing class) ─────────────────
+      if (existingLog.status === 'Present') {
+        if (distance < threshold.earlyLeaveRadius) {
+          // Still in class — update last verified timestamp
+          updateLastVerified(existingLog.id);
+          
+          // Also update to 'Completed' if it was previously flagged
+          if (existingLog.session_end_status === 'Left Early') {
+            updateAttendanceExitStatus(existingLog.id, 'Completed');
+            await sendNotification(
+              "✅ Back in Class!",
+              `Welcome back to ${activeClass.name}. Status restored to Present.`
+            );
+            console.log(`[BG Engine] RESTORED: ${activeClass.name} — student returned (${distance.toFixed(0)}m)`);
+          } else {
+            console.log(`[BG Engine] VERIFIED: Still in ${activeClass.name} (${distance.toFixed(0)}m)`);
+          }
+        } else {
+          // Left early — flag it
+          updateAttendanceExitStatus(existingLog.id, 'Left Early');
+          await sendNotification(
+            "🚶 Early Leave Detected",
+            `You appear to have left ${activeClass.name} (${typeLabel}). ` +
+            `Distance: ${distance.toFixed(0)}m (threshold: ${threshold.earlyLeaveRadius}m).\n\n` +
+            `If this is a GPS error, return to the classroom — we'll re-check in 15 minutes.`
+          );
+          console.log(`[BG Engine] EARLY LEAVE: ${activeClass.name} (${distance.toFixed(0)}m > ${threshold.earlyLeaveRadius}m)`);
+        }
       }
-    } catch (networkErr) {
-      console.log("[BG Engine] Could not check Wi-Fi:", networkErr);
+      // If status is 'Absent' or 'Spoofed', don't re-check
+      return BackgroundFetch.BackgroundFetchResult.NewData;
     }
 
-    // 8. Final Decision: Mark Present if within 50 meters
-    if (distance < 50) {
+    // ── Step 6: First-time attendance marking ───────────────────────
+    if (distance < threshold.presentRadius) {
       db.runSync(
-        `INSERT INTO attendance_logs (class_id, date, status, marked_at) VALUES (?, ?, ?, ?)`,
-        [activeClass.id, todayDate, 'Present', now.toISOString()]
+        `INSERT INTO attendance_logs (class_id, date, status, marked_at, session_end_status, last_verified_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        [activeClass.id, todayDate, 'Present', now.toISOString(), 'Completed', now.toISOString()]
       );
       await sendNotification(
         "✅ Attendance Marked!",
-        `You were marked present for ${activeClass.name}. Distance: ${distance.toFixed(0)}m${wifiMatch ? ' | Wi-Fi ✓' : ''}`
+        `${typeLabel} ${activeClass.name} — Present! ` +
+        `Distance: ${distance.toFixed(0)}m${wifiMatch ? ' | Wi-Fi ✓' : ''}\n` +
+        `We'll continue verifying every 15 minutes until class ends.`
       );
-      console.log(`[BG Engine] PRESENT: ${activeClass.name} (${distance.toFixed(0)}m)`);
+      console.log(`[BG Engine] PRESENT: ${activeClass.name} (${distance.toFixed(0)}m < ${threshold.presentRadius}m)`);
     } else {
       db.runSync(
-        `INSERT INTO attendance_logs (class_id, date, status, marked_at) VALUES (?, ?, ?, ?)`,
-        [activeClass.id, todayDate, 'Absent', now.toISOString()]
+        `INSERT INTO attendance_logs (class_id, date, status, marked_at, session_end_status) VALUES (?, ?, ?, ?, ?)`,
+        [activeClass.id, todayDate, 'Absent', now.toISOString(), 'N/A']
       );
       await sendNotification(
         "❌ Too Far From Class",
-        `You are ${distance.toFixed(0)}m from ${activeClass.name}. Marked as Absent.`
+        `${typeLabel} ${activeClass.name} — You are ${distance.toFixed(0)}m away ` +
+        `(need to be within ${threshold.presentRadius}m). Marked as Absent.`
       );
-      console.log(`[BG Engine] ABSENT: ${activeClass.name} (${distance.toFixed(0)}m away)`);
+      console.log(`[BG Engine] ABSENT: ${activeClass.name} (${distance.toFixed(0)}m > ${threshold.presentRadius}m)`);
     }
 
     return BackgroundFetch.BackgroundFetchResult.NewData;
@@ -175,10 +207,11 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
   }
 });
 
-// 2. Register the Task with the OS
+// ═══════════════════════════════════════════════════════════════════════
+// Task Registration
+// ═══════════════════════════════════════════════════════════════════════
 export async function registerBackgroundValidationTask() {
   try {
-    // Requires Background Location permissions
     const { status } = await Location.requestBackgroundPermissionsAsync();
     if (status !== 'granted') {
       console.log("Background location denied. Battery-saving validation cannot run.");
@@ -186,11 +219,11 @@ export async function registerBackgroundValidationTask() {
     }
 
     await BackgroundFetch.registerTaskAsync(BACKGROUND_VALIDATION_TASK, {
-      minimumInterval: 15 * 60, // 15 minutes
-      stopOnTerminate: false, // Android only: Keep running after app swipe-kill
-      startOnBoot: true,      // Android only: Start when phone reboots
+      minimumInterval: 15 * 60, // 15 minutes — matches re-verification cycle
+      stopOnTerminate: false,   // Android: Keep running after app swipe-kill
+      startOnBoot: true,        // Android: Start when phone reboots
     });
-    console.log("Background Validation Engine registered successfully!");
+    console.log("Background Validation Engine registered successfully (15-min persistent session mode)!");
   } catch (err) {
     console.log("Task Register failed:", err);
   }
