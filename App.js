@@ -14,6 +14,7 @@ import UploadTimetableScreen from './screens/UploadTimetableScreen';
 import AnchorClassScreen from './screens/AnchorClassScreen';
 import ManualEntryScreen from './screens/ManualEntryScreen';
 import ProfileScreen from './screens/ProfileScreen';
+import CalendarScreen from './screens/CalendarScreen';
 
 import { initDB } from './database';
 import { registerBackgroundValidationTask } from './backgroundEngine';
@@ -74,6 +75,14 @@ function DrawerNavigator() {
         options={{ 
           title: '📅 My Timetable',
           headerTitle: 'My Schedule',
+        }} 
+      />
+      <Drawer.Screen 
+        name="Calendar" 
+        component={CalendarScreen} 
+        options={{ 
+          title: '🗓️ College Calendar',
+          headerTitle: 'Academic Events',
         }} 
       />
       <Drawer.Screen 

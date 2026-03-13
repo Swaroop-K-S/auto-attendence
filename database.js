@@ -30,6 +30,13 @@ export const initDB = () => {
         last_verified_at TEXT,
         FOREIGN KEY(class_id) REFERENCES classes(id)
       );
+      CREATE TABLE IF NOT EXISTS academic_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        date TEXT NOT NULL,
+        type TEXT NOT NULL,
+        is_holiday BOOLEAN DEFAULT 0
+      );
     `);
 
     // ─── Migration: Add new columns if upgrading from old schema ──────
@@ -37,6 +44,19 @@ export const initDB = () => {
     try { db.execSync(`ALTER TABLE classes ADD COLUMN class_type TEXT DEFAULT 'theory'`); } catch(e) {}
     try { db.execSync(`ALTER TABLE attendance_logs ADD COLUMN session_end_status TEXT DEFAULT 'Completed'`); } catch(e) {}
     try { db.execSync(`ALTER TABLE attendance_logs ADD COLUMN last_verified_at TEXT`); } catch(e) {}
+
+    // ─── Migration: Create academic_events if it doesn't exist ────────
+    try {
+      db.execSync(`
+        CREATE TABLE IF NOT EXISTS academic_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          date TEXT NOT NULL,
+          type TEXT NOT NULL,
+          is_holiday BOOLEAN DEFAULT 0
+        )
+      `);
+    } catch(e) { console.log('Migration for academic_events failed', e); }
 
     // ─── Seed Sample Data ─────────────────────────────────────────────
     const count = db.getAllSync("SELECT COUNT(*) as count FROM classes")[0].count;
@@ -242,6 +262,75 @@ export const getAttendanceLog = (classId, date) => {
     ) || null;
   } catch (error) {
     console.error("Error fetching attendance log:", error);
+    return null;
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// Academic Calendar Events
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Adds an academic event to the database.
+ * @param {object} event - { title: string, date: string (YYYY-MM-DD), type: 'holiday'|'college_event'|'exam' }
+ */
+export const addAcademicEvent = (event) => {
+  try {
+    const isHoliday = event.type === 'holiday' ? 1 : 0;
+    db.runSync(
+      `INSERT INTO academic_events (title, date, type, is_holiday) VALUES (?, ?, ?, ?)`,
+      [event.title, event.date, event.type, isHoliday]
+    );
+    console.log(`Event added: ${event.title} on ${event.date}`);
+  } catch (error) {
+    console.error("Error adding academic event:", error);
+    throw error;
+  }
+};
+
+/**
+ * Fetches events for a specific month.
+ * @param {string} monthYear - Format YYYY-MM
+ * @returns {Array} List of events in that month
+ */
+export const getEventsForMonth = (monthYear) => {
+  try {
+    return db.getAllSync(
+      `SELECT * FROM academic_events WHERE date LIKE ? ORDER BY date ASC`,
+      [`${monthYear}-%`]
+    );
+  } catch (error) {
+    console.error("Error fetching academic events for month:", error);
+    return [];
+  }
+};
+
+/**
+ * Fetches all academic events.
+ * @returns {Array} List of all events
+ */
+export const getAllAcademicEvents = () => {
+  try {
+    return db.getAllSync(`SELECT * FROM academic_events ORDER BY date ASC`);
+  } catch (error) {
+    console.error("Error fetching all academic events:", error);
+    return [];
+  }
+};
+
+/**
+ * Checks if a specific date is a holiday.
+ * @param {string} date - Format YYYY-MM-DD
+ * @returns {boolean} True if holiday
+ */
+export const getEventByDate = (date) => {
+  try {
+    return db.getFirstSync(
+      `SELECT * FROM academic_events WHERE date = ?`,
+      [date]
+    ) || null;
+  } catch (error) {
+    console.error("Error checking date for event:", error);
     return null;
   }
 };

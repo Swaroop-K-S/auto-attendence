@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import * as Notifications from 'expo-notifications';
-import { getDBConnection } from '../database';
+import { getDBConnection, getAllAcademicEvents } from '../database';
+import { useFocusEffect } from '@react-navigation/native';
 
 // Configure Notifications to show even when app is open
 Notifications.setNotificationHandler({
@@ -17,46 +18,65 @@ export default function HomeScreen({ navigation }) {
   const [classesHeld, setClassesHeld] = useState(0);
   const [attended, setAttended] = useState(0);
 
+  // Calendar Event States
+  const [upcomingEvent, setUpcomingEvent] = useState(null);
+  const [daysUntil, setDaysUntil] = useState(0);
+  const [hasAnyEvents, setHasAnyEvents] = useState(true);
+
   useEffect(() => {
-    // Request permission for local notifications (Reminders/Confirmations)
+    // Request permission for local notifications
     Notifications.requestPermissionsAsync();
-    
-    // Load Analytics from SQLite
-    loadAnalytics();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadAnalytics();
+    }, [])
+  );
 
   const loadAnalytics = () => {
     try {
       const db = getDBConnection();
-      // SQLite query to calculate percentages
       const history = db.getAllSync("SELECT status FROM attendance_logs");
       
       const total = history.length;
-      if (total === 0) {
-        setAttendancePercent('--');
-        return;
+      if (total > 0) {
+        const presentCount = history.filter(row => row.status === 'Present').length;
+        const percentage = Math.round((presentCount / total) * 100);
+        setClassesHeld(total);
+        setAttended(presentCount);
+        setAttendancePercent(percentage.toString());
       }
-      
-      const presentCount = history.filter(row => row.status === 'Present').length;
-      const percentage = Math.round((presentCount / total) * 100);
-      
-      setClassesHeld(total);
-      setAttended(presentCount);
-      setAttendancePercent(percentage.toString());
+
+      // Load Events
+      const allEvents = getAllAcademicEvents();
+      if (allEvents.length === 0) {
+        setHasAnyEvents(false);
+        setUpcomingEvent(null);
+      } else {
+        setHasAnyEvents(true);
+        // Find the next upcoming event from today
+        const todayStr = new Date().toISOString().split('T')[0];
+        const futureEvents = allEvents.filter(e => e.date >= todayStr);
+        
+        if (futureEvents.length > 0) {
+          const nextEvent = futureEvents[0];
+          setUpcomingEvent(nextEvent);
+          
+          // Calculate days until
+          const eventDate = new Date(nextEvent.date);
+          const today = new Date(todayStr);
+          const diffTime = Math.abs(eventDate - today);
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          setDaysUntil(diffDays);
+        } else {
+          setUpcomingEvent(null);
+        }
+      }
       
     } catch (err) {
       console.log("No data yet or DB error:", err);
     }
-  };
-
-  const testNotification = async () => {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: "✅ Attendance Marked!",
-        body: "You were successfully marked present for Computer Networks.",
-      },
-      trigger: null, // trigger immediately
-    });
   };
 
   return (
@@ -73,6 +93,39 @@ export default function HomeScreen({ navigation }) {
           </View>
         </View>
       </View>
+
+      {/* ─── Academic Calendar Section ─── */}
+      {!hasAnyEvents ? (
+        <TouchableOpacity 
+          style={styles.bannerContainer}
+          onPress={() => navigation.navigate('Calendar')}
+        >
+          <Text style={styles.bannerIcon}>📅</Text>
+          <View style={styles.bannerTextContainer}>
+            <Text style={styles.bannerTitle}>Help us stay accurate!</Text>
+            <Text style={styles.bannerSubtext}>
+              Upload your college's annual calendar to automatically pause attendance during fests and holidays.
+            </Text>
+          </View>
+        </TouchableOpacity>
+      ) : upcomingEvent ? (
+        <TouchableOpacity 
+          style={styles.upcomingCard}
+          onPress={() => navigation.navigate('Calendar')}
+        >
+          <View style={styles.upcomingHeader}>
+            <Text style={styles.upcomingTitle}>🗓️ Upcoming Event</Text>
+            <Text style={styles.upcomingDays}>
+              {daysUntil === 0 ? 'Today!' : `in ${daysUntil} day${daysUntil > 1 ? 's' : ''}`}
+            </Text>
+          </View>
+          <Text style={styles.upcomingName}>{upcomingEvent.title}</Text>
+          <Text style={styles.upcomingDate}>
+            {upcomingEvent.date} • {upcomingEvent.is_holiday ? 'Holiday' : 'College Event'}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+
 
       <View style={styles.actionsContainer}>
         <TouchableOpacity 
@@ -151,6 +204,77 @@ const styles = StyleSheet.create({
     color: '#888',
     fontSize: 14,
   },
+  // ─── Academic Calendar Styles ───
+  bannerContainer: {
+    backgroundColor: '#e3f2fd',
+    borderRadius: 15,
+    padding: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 25,
+    borderWidth: 1,
+    borderColor: '#bbdefb',
+  },
+  bannerIcon: {
+    fontSize: 32,
+    marginRight: 15,
+  },
+  bannerTextContainer: {
+    flex: 1,
+  },
+  bannerTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#1565c0',
+    marginBottom: 4,
+  },
+  bannerSubtext: {
+    fontSize: 13,
+    color: '#0d47a1',
+    lineHeight: 18,
+  },
+  upcomingCard: {
+    backgroundColor: '#fff',
+    borderRadius: 15,
+    padding: 20,
+    marginBottom: 25,
+    borderLeftWidth: 4,
+    borderLeftColor: '#9c27b0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  upcomingHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  upcomingTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#888',
+    textTransform: 'uppercase',
+  },
+  upcomingDays: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#ff3b30',
+  },
+  upcomingName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#222',
+  },
+  upcomingDate: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 5,
+  },
+
+  // ─── Actions ───
   actionsContainer: {
     gap: 15,
   },
@@ -188,4 +312,5 @@ const styles = StyleSheet.create({
     color: '#666',
     fontWeight: '500',
   }
+
 });

@@ -132,3 +132,69 @@ export async function parseTimetableImage(base64Image, mimeType = 'image/jpeg') 
     return { name, day, start_time, end_time, room, type };
   });
 }
+
+const ACADEMIC_CALENDAR_PROMPT = `Analyze this document which is a college annual calendar. Extract every significant date, holiday, exam start date, and college fest. 
+
+Return the data as a clean JSON array: 
+[{"title": "Diwali", "date": "2026-11-01", "type": "holiday"}, {"title": "Internal Exams", "date": "2026-03-20", "type": "exam"}]
+
+Ensure dates are in YYYY-MM-DD format. Type must be one of: "holiday", "college_event", or "exam".
+
+IMPORTANT RULES:
+1. Return ONLY the JSON array, no markdown, no explanation, no code fences.
+2. Ensure dates are strictly YYYY-MM-DD. If year is not mentioned, infer it from the calendar context.
+3. If it's a date range, include it as multiple single days or just the start date if multiple days is too complex, prefer multiple individual days.`;
+
+/**
+ * Sends a base64 image of an academic calendar to Gemini Vision API and returns parsed events.
+ * @param {string} base64Image - The base64-encoded image data
+ * @param {string} mimeType - The MIME type of the image
+ * @returns {Array} Array of event objects
+ */
+export async function parseAnnualCalendar(base64Image, mimeType = 'image/jpeg') {
+  if (GEMINI_API_KEY === 'YOUR_API_KEY_HERE') {
+    throw new Error('Please set your Gemini API key in geminiAPI.js.');
+  }
+
+  const requestBody = {
+    contents: [{
+      parts: [
+        { text: ACADEMIC_CALENDAR_PROMPT },
+        { inlineData: { mimeType: mimeType, data: base64Image } }
+      ]
+    }],
+    generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
+  };
+
+  const response = await fetch(GEMINI_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(`Gemini API error (${response.status}): ${errorData?.error?.message || 'Unknown error'}`);
+  }
+
+  const result = await response.json();
+  const textContent = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (!textContent) throw new Error('Gemini returned an empty response.');
+
+  let cleanedText = textContent.trim().replace(/```json\s*/g, '').replace(/```\s*/g, '');
+
+  let events;
+  try {
+    events = JSON.parse(cleanedText);
+  } catch (parseError) {
+    console.error('Raw Gemini response:', textContent);
+    throw new Error('Could not parse the AI response. Please ensure the image is clear.');
+  }
+
+  if (!Array.isArray(events) || events.length === 0) {
+    throw new Error('No events found in the image. Make sure the calendar is clearly visible.');
+  }
+
+  return events;
+}

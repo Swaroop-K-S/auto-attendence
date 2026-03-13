@@ -3,7 +3,7 @@ import * as BackgroundFetch from 'expo-background-fetch';
 import * as Location from 'expo-location';
 import * as Network from 'expo-network';
 import * as Notifications from 'expo-notifications';
-import { getDBConnection, getActiveClass, isAlreadyMarked, getAttendanceLog, updateLastVerified, updateAttendanceExitStatus } from './database';
+import { getDBConnection, getActiveClass, isAlreadyMarked, getAttendanceLog, updateLastVerified, updateAttendanceExitStatus, getEventByDate } from './database';
 
 const BACKGROUND_VALIDATION_TASK = 'BACKGROUND_ATTENDANCE_VALIDATION_TASK';
 
@@ -90,6 +90,13 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
     const todayDate = now.toISOString().split('T')[0];
 
     console.log(`[BG Engine] ──── Wake-up: ${currentDay} ${currentTime} ────`);
+
+    // ── Step 0: Check Academic Calendar for Holidays ───────────────
+    const todayEvent = getEventByDate(todayDate);
+    if (todayEvent && todayEvent.is_holiday) {
+      console.log(`[BG Engine] Skipping: Today is a holiday - ${todayEvent.title}. No checks needed.`);
+      return BackgroundFetch.BackgroundFetchResult.NoData;
+    }
 
     // ── Step 1: Find an active class ────────────────────────────────
     const activeClass = getActiveClass(currentDay, currentTime);
