@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import * as Notifications from 'expo-notifications';
-import { getDBConnection, getAllAcademicEvents } from '../database';
+import { getDBConnection, getAllAcademicEvents, getAcademicMilestone } from '../database';
 import { useFocusEffect } from '@react-navigation/native';
 
 // Configure Notifications to show even when app is open
@@ -22,6 +22,9 @@ export default function HomeScreen({ navigation }) {
   const [upcomingEvent, setUpcomingEvent] = useState(null);
   const [daysUntil, setDaysUntil] = useState(0);
   const [hasAnyEvents, setHasAnyEvents] = useState(true);
+
+  // Fallback Countdown (e.g. Days to Semester End)
+  const [semesterEndCountdown, setSemesterEndCountdown] = useState(null);
 
   useEffect(() => {
     // Request permission for local notifications
@@ -48,23 +51,30 @@ export default function HomeScreen({ navigation }) {
         setAttendancePercent(percentage.toString());
       }
 
-      // Load Events
+      // Load Events & Prioritize Display
       const allEvents = getAllAcademicEvents();
       if (allEvents.length === 0) {
         setHasAnyEvents(false);
         setUpcomingEvent(null);
       } else {
         setHasAnyEvents(true);
-        // Find the next upcoming event from today
         const todayStr = new Date().toISOString().split('T')[0];
         const futureEvents = allEvents.filter(e => e.date >= todayStr);
         
-        if (futureEvents.length > 0) {
-          const nextEvent = futureEvents[0];
-          setUpcomingEvent(nextEvent);
+        let priorityEvent = null;
+
+        // 1. Look for the next Internal Exam first
+        priorityEvent = futureEvents.find(e => e.type === 'internal_exam');
+
+        // 2. Fallback to the absolute next event
+        if (!priorityEvent && futureEvents.length > 0) {
+            priorityEvent = futureEvents[0];
+        }
+
+        if (priorityEvent) {
+          setUpcomingEvent(priorityEvent);
           
-          // Calculate days until
-          const eventDate = new Date(nextEvent.date);
+          const eventDate = new Date(priorityEvent.date);
           const today = new Date(todayStr);
           const diffTime = Math.abs(eventDate - today);
           const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -72,6 +82,21 @@ export default function HomeScreen({ navigation }) {
         } else {
           setUpcomingEvent(null);
         }
+      }
+
+      // Check Semester End Countdown
+      const endMilestone = getAcademicMilestone('semester_end');
+      const startMilestone = getAcademicMilestone('semester_start');
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      if (startMilestone && endMilestone && todayStr >= startMilestone.date && todayStr <= endMilestone.date) {
+        const today = new Date(todayStr);
+        const endDate = new Date(endMilestone.date);
+        const diffTime = Math.abs(endDate - today);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        setSemesterEndCountdown(diffDays);
+      } else {
+        setSemesterEndCountdown(null);
       }
       
     } catch (err) {
@@ -108,23 +133,47 @@ export default function HomeScreen({ navigation }) {
             </Text>
           </View>
         </TouchableOpacity>
-      ) : upcomingEvent ? (
-        <TouchableOpacity 
-          style={styles.upcomingCard}
-          onPress={() => navigation.navigate('Calendar')}
-        >
-          <View style={styles.upcomingHeader}>
-            <Text style={styles.upcomingTitle}>🗓️ Upcoming Event</Text>
-            <Text style={styles.upcomingDays}>
-              {daysUntil === 0 ? 'Today!' : `in ${daysUntil} day${daysUntil > 1 ? 's' : ''}`}
-            </Text>
-          </View>
-          <Text style={styles.upcomingName}>{upcomingEvent.title}</Text>
-          <Text style={styles.upcomingDate}>
-            {upcomingEvent.date} • {upcomingEvent.is_holiday ? 'Holiday' : 'College Event'}
-          </Text>
-        </TouchableOpacity>
-      ) : null}
+      ) : (
+        <View>
+          {upcomingEvent && (
+            <TouchableOpacity 
+              style={styles.upcomingCard}
+              onPress={() => navigation.navigate('Calendar')}
+            >
+              <View style={styles.upcomingHeader}>
+                <Text style={[
+                  styles.upcomingTitle, 
+                  upcomingEvent.type === 'internal_exam' && { color: '#e65100' }
+                ]}>
+                  {upcomingEvent.type === 'internal_exam' ? '🚨 Next Internal' : '🗓️ Upcoming Event'}
+                </Text>
+                <Text style={styles.upcomingDays}>
+                  {daysUntil === 0 ? 'Today!' : `in ${daysUntil} day${daysUntil > 1 ? 's' : ''}`}
+                </Text>
+              </View>
+              <Text style={styles.upcomingName}>{upcomingEvent.title}</Text>
+              <Text style={styles.upcomingDate}>
+                {upcomingEvent.date} • {upcomingEvent.type === 'internal_exam' ? 'Internal Exam' : (upcomingEvent.is_holiday ? 'Holiday' : 'College Event')}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {!upcomingEvent && semesterEndCountdown !== null && (
+             <TouchableOpacity 
+               style={[styles.upcomingCard, { borderLeftColor: '#4caf50' }]}
+               onPress={() => navigation.navigate('Calendar')}
+             >
+               <View style={styles.upcomingHeader}>
+                 <Text style={[styles.upcomingTitle, { color: '#2e7d32' }]}>🏁 Semester Ending</Text>
+               </View>
+               <Text style={styles.upcomingName}>Days until Semester End</Text>
+               <Text style={[styles.upcomingDays, { fontSize: 24, marginTop: 10, color: '#4caf50' }]}>
+                  {semesterEndCountdown}
+               </Text>
+             </TouchableOpacity>
+          )}
+        </View>
+      )}
 
 
       <View style={styles.actionsContainer}>

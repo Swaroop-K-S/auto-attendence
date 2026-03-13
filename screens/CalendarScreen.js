@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator 
 } from 'react-native';
 import { Calendar } from 'react-native-calendars';
-import { getDBConnection, getEventsForMonth, addAcademicEvent } from '../database';
+import { getDBConnection, getEventsForMonth, addAcademicEvent, getAcademicMilestone } from '../database';
 import { parseAnnualCalendar } from '../geminiAPI';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
@@ -14,12 +14,48 @@ export default function CalendarScreen({ navigation }) {
   const [markedDates, setMarkedDates] = useState({});
   const [currentMonth, setCurrentMonth] = useState(new Date().toISOString().substring(0, 7));
   const [isLoading, setIsLoading] = useState(false);
+  const [currentWeek, setCurrentWeek] = useState(null);
 
   useFocusEffect(
     useCallback(() => {
       loadEvents(currentMonth);
+      calculateCurrentWeek();
     }, [currentMonth])
   );
+
+  const calculateCurrentWeek = () => {
+    try {
+      const startMilestone = getAcademicMilestone('semester_start');
+      const endMilestone = getAcademicMilestone('semester_end');
+      
+      if (startMilestone && startMilestone.date) {
+        const today = new Date();
+        const startDate = new Date(startMilestone.date);
+        
+        let endDate = null;
+        if (endMilestone && endMilestone.date) {
+            endDate = new Date(endMilestone.date);
+        }
+
+        // Only calculate if we are within the semester, or if there's no end date defined yet
+        if (today >= startDate && (!endDate || today <= endDate)) {
+            const diffTime = Math.abs(today - startDate);
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            const weekNumber = Math.ceil(diffDays / 7);
+            
+            // Handle edge case where today is exactly the start date
+            setCurrentWeek(weekNumber === 0 ? 1 : weekNumber);
+        } else {
+            setCurrentWeek(null);
+        }
+      } else {
+        setCurrentWeek(null);
+      }
+    } catch (e) {
+      console.error("Error calculating week", e);
+      setCurrentWeek(null);
+    }
+  };
 
   const loadEvents = (monthString) => {
     try {
@@ -33,7 +69,19 @@ export default function CalendarScreen({ navigation }) {
           newMarkedDates[event.date] = { dots: [] };
         }
         
-        const color = event.is_holiday ? '#ff3b30' : (event.type === 'exam' ? '#ff9500' : '#007AFF');
+        const isInternal = event.type === 'internal_exam';
+        
+        // Highlight logic for internal exams
+        if (isInternal) {
+          newMarkedDates[event.date] = {
+            ...newMarkedDates[event.date],
+            selected: true,
+            selectedColor: '#ffe0b2', // Soft Orange
+            selectedTextColor: '#e65100', // Deep Orange text
+          };
+        }
+
+        const color = event.is_holiday ? '#ff3b30' : (event.type === 'exam' || isInternal ? '#ff9500' : '#007AFF');
         // Prevent duplicate exact same color dots on one day
         if (!newMarkedDates[event.date].dots.find(d => d.color === color)) {
           newMarkedDates[event.date].dots.push({ color });
@@ -133,9 +181,12 @@ export default function CalendarScreen({ navigation }) {
 
   const renderEventItem = ({ item }) => {
     const isHoliday = item.is_holiday;
-    const isExam = item.type === 'exam';
-    const color = isHoliday ? '#ff3b30' : (isExam ? '#ff9500' : '#007AFF');
-    const bgColors = isHoliday ? '#ffebee' : (isExam ? '#fff3e0' : '#e3f2fd');
+    const isInternal = item.type === 'internal_exam';
+    const isExam = item.type === 'exam' || isInternal;
+    
+    // Use a distinct orange for internal exams to match the calendar highlight
+    const color = isHoliday ? '#ff3b30' : (isInternal ? '#e65100' : (isExam ? '#ff9500' : '#007AFF'));
+    const bgColors = isHoliday ? '#ffebee' : (isInternal ? '#ffe0b2' : (isExam ? '#fff3e0' : '#e3f2fd'));
 
     return (
       <View style={[styles.eventCard, { borderLeftColor: color }]}>
@@ -145,7 +196,7 @@ export default function CalendarScreen({ navigation }) {
         </View>
         <View style={[styles.badge, { backgroundColor: bgColors }]}>
           <Text style={[styles.badgeText, { color }]}>
-            {isHoliday ? '🏖️ Holiday' : (isExam ? '📝 Exam' : '🎓 Event')}
+            {isHoliday ? '🏖️ Holiday' : (isInternal ? '📝 Internal' : (isExam ? '📝 Exam' : '🎓 Event'))}
           </Text>
         </View>
       </View>
@@ -154,13 +205,19 @@ export default function CalendarScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
+      {currentWeek !== null && (
+        <View style={styles.weekBanner}>
+          <Text style={styles.weekBannerText}>🎓 Week {currentWeek} of the Semester</Text>
+        </View>
+      )}
+
       <Calendar
         current={new Date().toISOString().split('T')[0]}
         onMonthChange={handleMonthChange}
         markingType={'multi-dot'}
         markedDates={markedDates}
         theme={{
-          selectedDayBackgroundColor: '#007AFF',
+          selectedDayBackgroundColor: '#007AFF', // Default selected, overridden by specific day markedDates
           todayTextColor: '#007AFF',
           arrowColor: '#007AFF',
         }}
@@ -212,6 +269,19 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  weekBanner: {
+    backgroundColor: '#e8f5e9', // Soft green background
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#c8e6c9',
+  },
+  weekBannerText: {
+    color: '#2e7d32', // Dark green text
+    fontWeight: 'bold',
+    fontSize: 16,
   },
   calendar: {
     marginBottom: 10,
