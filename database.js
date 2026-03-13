@@ -272,7 +272,7 @@ export const getAttendanceLog = (classId, date) => {
 
 /**
  * Adds an academic event to the database.
- * @param {object} event - { title: string, date: string (YYYY-MM-DD), type: 'holiday'|'college_event'|'exam' }
+ * @param {object} event - { title: string, date: string (YYYY-MM-DD), type: 'holiday'|'college_event'|'exam'|'internal_exam'|'semester_start'|'semester_end' }
  */
 export const addAcademicEvent = (event) => {
   try {
@@ -332,5 +332,44 @@ export const getEventByDate = (date) => {
   } catch (error) {
     console.error("Error checking date for event:", error);
     return null;
+  }
+};
+
+/**
+ * Fetches the specific date for a given academic milestone.
+ * @param {string} milestoneType - e.g., 'semester_start', 'semester_end', 'internal_exam'
+ * @returns {object|null} The milestone event object
+ */
+export const getAcademicMilestone = (milestoneType) => {
+  try {
+    return db.getFirstSync(
+      `SELECT * FROM academic_events WHERE type = ? ORDER BY date ASC`,
+      [milestoneType]
+    ) || null;
+  } catch (error) {
+    console.error(`Error fetching milestone ${milestoneType}:`, error);
+    return null;
+  }
+};
+
+/**
+ * Checks if a given date falls within the active semester block.
+ * @param {string} date - Format YYYY-MM-DD
+ * @returns {boolean} True if within semester, False if out of bounds or if bounds aren't set
+ */
+export const isWithinActiveSemester = (date) => {
+  try {
+    const startEvent = getAcademicMilestone('semester_start');
+    const endEvent = getAcademicMilestone('semester_end');
+
+    if (!startEvent || !endEvent) {
+      // If we don't have bounds defined, default to true so attendance keeps working
+      return true;
+    }
+
+    return date >= startEvent.date && date <= endEvent.date;
+  } catch (error) {
+    console.error("Error checking active semester bounds:", error);
+    return true; // Default to true on error to avoid breaking core functionality
   }
 };
