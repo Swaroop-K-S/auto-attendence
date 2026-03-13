@@ -1,5 +1,5 @@
 import 'react-native-gesture-handler';
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createDrawerNavigator } from '@react-navigation/drawer';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -16,7 +16,7 @@ import ManualEntryScreen from './screens/ManualEntryScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import CalendarScreen from './screens/CalendarScreen';
 
-import { initDB } from './database';
+import { initDB, getUserProfile } from './database';
 import { registerBackgroundValidationTask } from './backgroundEngine';
 
 const Drawer = createDrawerNavigator();
@@ -110,6 +110,7 @@ function DrawerNavigator() {
  */
 function AppRoot() {
   const { user, loading } = useAuth();
+  const [profileExists, setProfileExists] = useState(false);
 
   useEffect(() => {
     // Initialize DB and background engine on app start
@@ -117,13 +118,26 @@ function AppRoot() {
     registerBackgroundValidationTask();
   }, []);
 
+  // Check SQLite profile whenever user state changes
+  useEffect(() => {
+    if (!loading && user) {
+      const profile = getUserProfile();
+      setProfileExists(!!profile);
+    } else {
+      setProfileExists(false);
+    }
+  }, [user, loading]);
+
   if (loading) {
     return null; // Don't render anything until auth state is loaded from AsyncStorage
   }
 
+  // Navigation Guard: show LoginScreen if no user OR no SQLite profile
+  const isAuthenticated = !!user && profileExists;
+
   return (
     <NavigationContainer>
-      {user ? <DrawerNavigator /> : <LoginScreen />}
+      {isAuthenticated ? <DrawerNavigator /> : <LoginScreen />}
     </NavigationContainer>
   );
 }

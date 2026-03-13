@@ -9,6 +9,7 @@ export const initDB = () => {
       CREATE TABLE IF NOT EXISTS classes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT DEFAULT 'local_user',
+        student_srn TEXT DEFAULT '',
         name TEXT NOT NULL,
         day_of_week TEXT NOT NULL,
         start_time TEXT NOT NULL,
@@ -23,6 +24,7 @@ export const initDB = () => {
       CREATE TABLE IF NOT EXISTS attendance_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         class_id INTEGER,
+        student_srn TEXT DEFAULT '',
         date TEXT,
         status TEXT,
         marked_at TEXT,
@@ -42,13 +44,23 @@ export const initDB = () => {
         key TEXT PRIMARY KEY,
         value TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS user_profile (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        srn TEXT NOT NULL UNIQUE,
+        branch TEXT NOT NULL,
+        created_at TEXT
+      );
     `);
 
     // ─── Migration: Add new columns if upgrading from old schema ──────
     try { db.execSync(`ALTER TABLE classes ADD COLUMN user_id TEXT DEFAULT 'local_user'`); } catch(e) {}
     try { db.execSync(`ALTER TABLE classes ADD COLUMN class_type TEXT DEFAULT 'theory'`); } catch(e) {}
+    try { db.execSync(`ALTER TABLE classes ADD COLUMN student_srn TEXT DEFAULT ''`); } catch(e) {}
     try { db.execSync(`ALTER TABLE attendance_logs ADD COLUMN session_end_status TEXT DEFAULT 'Completed'`); } catch(e) {}
     try { db.execSync(`ALTER TABLE attendance_logs ADD COLUMN last_verified_at TEXT`); } catch(e) {}
+    try { db.execSync(`ALTER TABLE attendance_logs ADD COLUMN student_srn TEXT DEFAULT ''`); } catch(e) {}
 
     // ─── Migration: Create academic_events if it doesn't exist ────────
     try {
@@ -74,6 +86,19 @@ export const initDB = () => {
       // Seed default Saturday logic to point to 'Monday'
       db.runSync(`INSERT OR IGNORE INTO settings (key, value) VALUES ('saturday_logic', 'Monday')`);
     } catch(e) { console.log('Migration for settings failed', e); }
+
+    // ─── Migration: Create user_profile if it doesn't exist ───────────
+    try {
+      db.execSync(`
+        CREATE TABLE IF NOT EXISTS user_profile (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          srn TEXT NOT NULL UNIQUE,
+          branch TEXT NOT NULL,
+          created_at TEXT
+        )
+      `);
+    } catch(e) { console.log('Migration for user_profile failed', e); }
 
     // ─── Seed Sample Data ─────────────────────────────────────────────
     const count = db.getAllSync("SELECT COUNT(*) as count FROM classes")[0].count;
@@ -116,15 +141,15 @@ export const getDBConnection = () => {
  * @param {object} classData - { name, day_of_week, start_time, end_time, room_name, class_type }
  * @param {string} userId - The authenticated user's ID (defaults to 'local_user')
  */
-export const saveUserClass = (classData, userId = 'local_user') => {
+export const saveUserClass = (classData, userId = 'local_user', studentSrn = '') => {
   try {
     const { name, day_of_week, start_time, end_time, room_name, class_type } = classData;
     db.runSync(
-      `INSERT INTO classes (user_id, name, day_of_week, start_time, end_time, room_name, class_type) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [userId, name, day_of_week, start_time, end_time, room_name || '', class_type || 'theory']
+      `INSERT INTO classes (user_id, student_srn, name, day_of_week, start_time, end_time, room_name, class_type) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, studentSrn, name, day_of_week, start_time, end_time, room_name || '', class_type || 'theory']
     );
-    console.log(`Class "${name}" saved for user ${userId}`);
+    console.log(`Class "${name}" saved for user ${userId} (SRN: ${studentSrn})`);
   } catch (error) {
     console.error("Error saving user class:", error);
     throw error;
@@ -388,5 +413,40 @@ export const isWithinActiveSemester = (date) => {
   } catch (error) {
     console.error("Error checking active semester bounds:", error);
     return true; // Default to true on error to avoid breaking core functionality
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// User Profile Management
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Saves or updates the student's profile in the local SQLite database.
+ * @param {object} profile - { name: string, srn: string, branch: string }
+ */
+export const saveUserProfile = (profile) => {
+  try {
+    const now = new Date().toISOString();
+    db.runSync(
+      `INSERT OR REPLACE INTO user_profile (id, name, srn, branch, created_at) VALUES (1, ?, ?, ?, ?)`,
+      [profile.name, profile.srn, profile.branch, now]
+    );
+    console.log(`Profile saved: ${profile.name} (${profile.srn})`);
+  } catch (error) {
+    console.error("Error saving user profile:", error);
+    throw error;
+  }
+};
+
+/**
+ * Retrieves the saved student profile from SQLite.
+ * @returns {object|null} The profile object or null if not set up yet.
+ */
+export const getUserProfile = () => {
+  try {
+    return db.getFirstSync(`SELECT * FROM user_profile WHERE id = 1`) || null;
+  } catch (error) {
+    console.error("Error fetching user profile:", error);
+    return null;
   }
 };

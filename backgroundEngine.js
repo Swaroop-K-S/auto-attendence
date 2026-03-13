@@ -3,7 +3,7 @@ import * as BackgroundFetch from 'expo-background-fetch';
 import * as Location from 'expo-location';
 import * as Network from 'expo-network';
 import * as Notifications from 'expo-notifications';
-import { getDBConnection, getActiveClass, isAlreadyMarked, getAttendanceLog, updateLastVerified, updateAttendanceExitStatus, getEventByDate } from './database';
+import { getDBConnection, getActiveClass, isAlreadyMarked, getAttendanceLog, updateLastVerified, updateAttendanceExitStatus, getEventByDate, getUserProfile } from './database';
 
 const BACKGROUND_VALIDATION_TASK = 'BACKGROUND_ATTENDANCE_VALIDATION_TASK';
 
@@ -139,9 +139,11 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
     if (location.mocked) {
       console.log("[BG Engine] SPOOFING DETECTED!");
       const db = getDBConnection();
+      const profile = getUserProfile();
+      const studentSrn = activeClass.student_srn || profile?.srn || '';
       db.runSync(
-        `INSERT INTO attendance_logs (class_id, date, status, marked_at, session_end_status) VALUES (?, ?, ?, ?, ?)`,
-        [activeClass.id, todayDate, 'Spoofed', now.toISOString(), 'Spoofed']
+        `INSERT INTO attendance_logs (class_id, student_srn, date, status, marked_at, session_end_status) VALUES (?, ?, ?, ?, ?, ?)`,
+        [activeClass.id, studentSrn, todayDate, 'Spoofed', now.toISOString(), 'Spoofed']
       );
       await sendNotification(
         "⚠️ Spoofing Detected",
@@ -200,10 +202,13 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
     }
 
     // ── Step 6: First-time attendance marking ───────────────────────
+    const profile = getUserProfile();
+    const studentSrn = activeClass.student_srn || profile?.srn || '';
+
     if (distance < threshold.presentRadius && wifiMatch) {
       db.runSync(
-        `INSERT INTO attendance_logs (class_id, date, status, marked_at, session_end_status, last_verified_at) VALUES (?, ?, ?, ?, ?, ?)`,
-        [activeClass.id, todayDate, 'Present', now.toISOString(), 'Completed', now.toISOString()]
+        `INSERT INTO attendance_logs (class_id, student_srn, date, status, marked_at, session_end_status, last_verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [activeClass.id, studentSrn, todayDate, 'Present', now.toISOString(), 'Completed', now.toISOString()]
       );
       await sendNotification(
         "✅ Attendance Marked!",
@@ -216,8 +221,8 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
       let failureReason = distance >= threshold.presentRadius ? `Too far (${distance.toFixed(0)}m)` : 'Wi-Fi Mismatch';
       
       db.runSync(
-        `INSERT INTO attendance_logs (class_id, date, status, marked_at, session_end_status) VALUES (?, ?, ?, ?, ?)`,
-        [activeClass.id, todayDate, 'Absent', now.toISOString(), 'N/A']
+        `INSERT INTO attendance_logs (class_id, student_srn, date, status, marked_at, session_end_status) VALUES (?, ?, ?, ?, ?, ?)`,
+        [activeClass.id, studentSrn, todayDate, 'Absent', now.toISOString(), 'N/A']
       );
       await sendNotification(
         "❌ Verification Failed",

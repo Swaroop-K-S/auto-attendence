@@ -7,8 +7,14 @@ import { useAuth } from '../AuthContext';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import { parseTimetableImage, parseAnnualCalendar } from '../geminiAPI';
-import { getDBConnection, saveUserClass, addAcademicEvent } from '../database';
+import { getDBConnection, saveUserClass, addAcademicEvent, saveUserProfile } from '../database';
 
+/**
+ * LoginScreen — 3-Step Setup Wizard:
+ *   Step 1: Profile (Name, SRN, Branch) — saved to both AsyncStorage & SQLite
+ *   Step 2: Timetable Upload (AI-parsed, linked to SRN)
+ *   Step 3: Calendar Upload (AI-parsed)
+ */
 export default function LoginScreen() {
   const { login } = useAuth();
   
@@ -29,6 +35,18 @@ export default function LoginScreen() {
       Alert.alert("Required", "Please fill out all fields to continue.");
       return;
     }
+
+    // Save profile to SQLite immediately
+    try {
+      saveUserProfile({
+        name: name.trim(),
+        srn: srn.trim().toUpperCase(),
+        branch: branch.trim(),
+      });
+    } catch (e) {
+      console.error("Profile save error:", e);
+    }
+
     setStep(2);
   };
 
@@ -67,7 +85,7 @@ export default function LoginScreen() {
 
       Alert.alert("Success!", `${successMsg} (${count} items found)`);
       if (nextStep === 'finish') {
-        login(name.trim(), srn.trim(), branch.trim());
+        await login(name.trim(), srn.trim().toUpperCase(), branch.trim());
       } else {
         setStep(nextStep);
       }
@@ -80,11 +98,13 @@ export default function LoginScreen() {
     }
   };
 
+  const studentSrn = srn.trim().toUpperCase();
+
   const processTimetable = async () => {
     await uploadAndProcess(
       parseTimetableImage,
       (cls) => {
-        // Map Gemini output keys → database column names
+        // Map Gemini output keys → database column names, linked to SRN
         const mapped = {
           name: cls.name || 'Unnamed Class',
           day_of_week: cls.day || 'Monday',
@@ -93,7 +113,7 @@ export default function LoginScreen() {
           room_name: cls.room || '',
           class_type: cls.type || 'theory',
         };
-        saveUserClass(mapped, 'local_user');
+        saveUserClass(mapped, 'local_user', studentSrn);
       },
       "Timetable successfully saved!",
       3
@@ -118,12 +138,12 @@ export default function LoginScreen() {
   };
 
   const skipToStep3 = () => setStep(3);
-  const skipAndFinish = async () => await login(name.trim(), srn.trim(), branch.trim());
+  const skipAndFinish = async () => await login(name.trim(), srn.trim().toUpperCase(), branch.trim());
 
   if (loading) {
     return (
       <View style={[styles.container, styles.center]}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <ActivityIndicator size="large" color="#4a6cf7" />
         <Text style={styles.loadingMessage}>{loadingText}</Text>
       </View>
     );
@@ -134,23 +154,34 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <ScrollView contentContainerStyle={styles.scrollInner}>
+      <ScrollView contentContainerStyle={styles.scrollInner} keyboardShouldPersistTaps="handled">
         <Text style={styles.emoji}>🎓</Text>
         <Text style={styles.title}>Smart Attendance</Text>
         
-        {/* Step 1: Profile */}
+        {/* Step 1: Profile Setup */}
         {step === 1 && (
           <View style={styles.stepContainer}>
-            <Text style={styles.stepTitle}>Let's set up your profile</Text>
+            <View style={styles.stepBadge}>
+              <Text style={styles.stepBadgeText}>STEP 1 OF 3</Text>
+            </View>
+            <Text style={styles.stepTitle}>Student Identity</Text>
+            <Text style={styles.stepDesc}>This information links your classes and attendance records to your student profile.</Text>
             <View style={styles.form}>
-              <Text style={styles.label}>Full Name *</Text>
-              <TextInput style={styles.input} value={name} onChangeText={setName} />
+              <View style={styles.fieldGroup}>
+                <Text style={styles.label}>Full Name</Text>
+                <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="e.g. Swaroop K S" placeholderTextColor="#bbb" />
+              </View>
 
-              <Text style={styles.label}>SRN / Roll Number *</Text>
-              <TextInput style={styles.input} value={srn} onChangeText={setSrn} autoCapitalize="characters" />
+              <View style={styles.fieldGroup}>
+                <Text style={styles.label}>SRN / Roll Number</Text>
+                <TextInput style={styles.input} value={srn} onChangeText={setSrn} autoCapitalize="characters" placeholder="e.g. 1SI22CS001" placeholderTextColor="#bbb" />
+                <Text style={styles.hint}>This will be linked to all your attendance records</Text>
+              </View>
 
-              <Text style={styles.label}>Branch / Course *</Text>
-              <TextInput style={styles.input} placeholder="e.g. B.Tech CSE" value={branch} onChangeText={setBranch} />
+              <View style={styles.fieldGroup}>
+                <Text style={styles.label}>Branch / Department</Text>
+                <TextInput style={styles.input} placeholder="e.g. B.Tech CSE" placeholderTextColor="#bbb" value={branch} onChangeText={setBranch} />
+              </View>
 
               <TouchableOpacity style={styles.primaryButton} onPress={handleNextStep1}>
                 <Text style={styles.primaryButtonText}>Next →</Text>
@@ -162,8 +193,11 @@ export default function LoginScreen() {
         {/* Step 2: Timetable */}
         {step === 2 && (
           <View style={styles.stepContainer}>
+            <View style={styles.stepBadge}>
+              <Text style={styles.stepBadgeText}>STEP 2 OF 3</Text>
+            </View>
             <Text style={styles.stepTitle}>Upload Timetable</Text>
-            <Text style={styles.stepDesc}>Upload a screenshot of your class schedule. Our AI will automatically extract and configure your classes for background tracking.</Text>
+            <Text style={styles.stepDesc}>Upload a screenshot of your class schedule. Our AI will extract and configure your classes for background tracking.</Text>
             
             <View style={styles.actionsBox}>
               <TouchableOpacity style={styles.primaryButton} onPress={processTimetable}>
@@ -180,7 +214,10 @@ export default function LoginScreen() {
         {/* Step 3: Calendar */}
         {step === 3 && (
           <View style={styles.stepContainer}>
-            <Text style={styles.stepTitle}>Final Step: Academic Calendar</Text>
+            <View style={styles.stepBadge}>
+              <Text style={styles.stepBadgeText}>STEP 3 OF 3</Text>
+            </View>
+            <Text style={styles.stepTitle}>Academic Calendar</Text>
             <Text style={styles.stepDesc}>Upload your college's annual calendar to automatically pause attendance tracking on holidays and highlight exam weeks.</Text>
             
             <View style={styles.actionsBox}>
@@ -200,23 +237,27 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f7fa' },
+  container: { flex: 1, backgroundColor: '#f0f4ff' },
   center: { justifyContent: 'center', alignItems: 'center' },
-  scrollInner: { flexGrow: 1, justifyContent: 'center', padding: 30 },
-  emoji: { fontSize: 60, textAlign: 'center', marginBottom: 10 },
-  title: { fontSize: 28, fontWeight: 'bold', color: '#1a1a2e', textAlign: 'center', marginBottom: 30 },
+  scrollInner: { flexGrow: 1, justifyContent: 'center', padding: 24 },
+  emoji: { fontSize: 56, textAlign: 'center', marginBottom: 8 },
+  title: { fontSize: 30, fontWeight: '800', color: '#1a1a2e', textAlign: 'center', marginBottom: 28, letterSpacing: -0.5 },
   
-  stepContainer: { backgroundColor: '#fff', padding: 25, borderRadius: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 5 },
-  stepTitle: { fontSize: 20, fontWeight: '700', color: '#333', marginBottom: 15, textAlign: 'center' },
-  stepDesc: { fontSize: 14, color: '#666', textAlign: 'center', marginBottom: 25, lineHeight: 22 },
+  stepContainer: { backgroundColor: '#fff', padding: 28, borderRadius: 20, shadowColor: '#1a1a2e', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.08, shadowRadius: 24, elevation: 8 },
+  stepBadge: { alignSelf: 'flex-start', backgroundColor: '#e8eeff', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 20, marginBottom: 18 },
+  stepBadgeText: { fontSize: 11, fontWeight: '700', color: '#4a6cf7', letterSpacing: 1 },
+  stepTitle: { fontSize: 22, fontWeight: '700', color: '#1a1a2e', marginBottom: 8 },
+  stepDesc: { fontSize: 14, color: '#777', textAlign: 'left', marginBottom: 24, lineHeight: 20 },
   
-  form: { gap: 12 },
-  label: { fontSize: 14, fontWeight: '600', color: '#555' },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 10, padding: 14, fontSize: 16, backgroundColor: '#fafafa' },
+  form: { gap: 18 },
+  fieldGroup: { gap: 6 },
+  label: { fontSize: 13, fontWeight: '700', color: '#555', textTransform: 'uppercase', letterSpacing: 0.5 },
+  input: { borderWidth: 1.5, borderColor: '#e2e8f0', borderRadius: 12, padding: 15, fontSize: 16, backgroundColor: '#fafbff', color: '#1a1a2e' },
+  hint: { fontSize: 12, color: '#aaa', marginTop: 2, fontStyle: 'italic' },
   
   actionsBox: { gap: 15 },
-  primaryButton: { backgroundColor: '#007AFF', padding: 16, borderRadius: 12, alignItems: 'center' },
-  primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  primaryButton: { backgroundColor: '#4a6cf7', padding: 17, borderRadius: 14, alignItems: 'center', shadowColor: '#4a6cf7', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
+  primaryButtonText: { color: '#fff', fontSize: 17, fontWeight: '700', letterSpacing: 0.3 },
   skipButton: { padding: 15, alignItems: 'center' },
   skipText: { color: '#888', fontWeight: '600', fontSize: 14 },
   
