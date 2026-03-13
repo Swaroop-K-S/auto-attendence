@@ -309,6 +309,87 @@ export const getAttendanceLog = (classId, date) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════
+// Dashboard Analytics Queries
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Returns attendance breakdown per subject (class name).
+ * Groups by class name and counts total logs vs "Present" logs.
+ * @returns {Array} [{ name, total, attended, percentage }]
+ */
+export const getSubjectWiseAttendance = () => {
+  try {
+    return db.getAllSync(`
+      SELECT 
+        c.name,
+        COUNT(a.id) as total,
+        SUM(CASE WHEN a.status = 'Present' THEN 1 ELSE 0 END) as attended,
+        ROUND(
+          SUM(CASE WHEN a.status = 'Present' THEN 1 ELSE 0 END) * 100.0 / COUNT(a.id), 
+          1
+        ) as percentage
+      FROM attendance_logs a
+      JOIN classes c ON c.id = a.class_id
+      GROUP BY c.name
+      ORDER BY percentage ASC
+    `);
+  } catch (error) {
+    console.error("Error fetching subject-wise attendance:", error);
+    return [];
+  }
+};
+
+/**
+ * Finds the next upcoming class based on the current day and time.
+ * Checks the current day first, then looks ahead through the week.
+ * @param {string} currentDay - e.g. "Monday"
+ * @param {string} currentTime - e.g. "09:05" in HH:mm format
+ * @returns {object|null} Next class object or null
+ */
+export const getNextUpcomingClass = (currentDay, currentTime) => {
+  try {
+    // First: check for next class TODAY
+    const todayNext = db.getFirstSync(
+      `SELECT * FROM classes WHERE day_of_week = ? AND start_time > ? ORDER BY start_time ASC LIMIT 1`,
+      [currentDay, currentTime]
+    );
+    if (todayNext) return { ...todayNext, isToday: true };
+
+    // Then: cycle through upcoming days
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const currentIndex = days.indexOf(currentDay);
+    for (let i = 1; i <= 7; i++) {
+      const nextDay = days[(currentIndex + i) % 7];
+      const nextClass = db.getFirstSync(
+        `SELECT * FROM classes WHERE day_of_week = ? ORDER BY start_time ASC LIMIT 1`,
+        [nextDay]
+      );
+      if (nextClass) return { ...nextClass, isToday: false, nextDay };
+    }
+    return null;
+  } catch (error) {
+    console.error("Error fetching next class:", error);
+    return null;
+  }
+};
+
+/**
+ * Calculates how many total class sessions should have occurred since
+ * the semester start date (or the earliest attendance log if no milestone).
+ * Useful for calculating "classes held vs classes possible."
+ * @returns {number} Total scheduled class count
+ */
+export const getTotalClassesSinceSemesterStart = () => {
+  try {
+    const totalLogs = db.getFirstSync(`SELECT COUNT(*) as count FROM attendance_logs`);
+    return totalLogs?.count || 0;
+  } catch (error) {
+    console.error("Error counting total classes:", error);
+    return 0;
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════
 // Academic Calendar Events
 // ═══════════════════════════════════════════════════════════════════════
 

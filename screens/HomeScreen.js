@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, RefreshControl } from 'react-native';
 import * as Notifications from 'expo-notifications';
-import { getDBConnection, getAllAcademicEvents, getAcademicMilestone } from '../database';
+import { 
+  getDBConnection, getAllAcademicEvents, getAcademicMilestone, 
+  getSubjectWiseAttendance, getNextUpcomingClass, getActiveClass 
+} from '../database';
 import { useFocusEffect } from '@react-navigation/native';
 
 // Configure Notifications to show even when app is open
@@ -14,21 +17,30 @@ Notifications.setNotificationHandler({
 });
 
 export default function HomeScreen({ navigation }) {
-  const [attendancePercent, setAttendancePercent] = useState('0');
+  // ─── Stats ───
+  const [attendancePercent, setAttendancePercent] = useState(0);
   const [classesHeld, setClassesHeld] = useState(0);
   const [attended, setAttended] = useState(0);
-  const [leavesRemaining, setLeavesRemaining] = useState(0);
+  const [safeMisses75, setSafeMisses75] = useState(0);
+  const [safeMisses85, setSafeMisses85] = useState(0);
 
-  // Calendar Event States
+  // ─── Per-Subject ───
+  const [subjectData, setSubjectData] = useState([]);
+
+  // ─── Next Class & Status ───
+  const [nextClass, setNextClass] = useState(null);
+  const [currentClass, setCurrentClass] = useState(null);
+  const [verificationStatus, setVerificationStatus] = useState('idle'); // idle | scanning | verified
+
+  // ─── Calendar ───
   const [upcomingEvent, setUpcomingEvent] = useState(null);
   const [daysUntil, setDaysUntil] = useState(0);
-  const [hasAnyEvents, setHasAnyEvents] = useState(true);
-
-  // Fallback Countdown (e.g. Days to Semester End)
   const [semesterEndCountdown, setSemesterEndCountdown] = useState(null);
 
+  // ─── Refresh ───
+  const [refreshing, setRefreshing] = useState(false);
+
   useEffect(() => {
-    // Request permission for local notifications
     Notifications.requestPermissionsAsync();
   }, []);
 
@@ -38,353 +50,505 @@ export default function HomeScreen({ navigation }) {
     }, [])
   );
 
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    loadAnalytics();
+    setRefreshing(false);
+  }, []);
+
   const loadAnalytics = () => {
     try {
       const db = getDBConnection();
-      const history = db.getAllSync("SELECT status FROM attendance_logs");
       const todayStr = new Date().toISOString().split('T')[0];
-      
+      const now = new Date();
+      const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const currentDay = days[now.getDay()];
+      const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+      // ────────────────────────────────────────────────────────
+      // 1. Overall Attendance
+      // ────────────────────────────────────────────────────────
+      const history = db.getAllSync("SELECT status FROM attendance_logs");
       const total = history.length;
       if (total > 0) {
         const presentCount = history.filter(row => row.status === 'Present').length;
         const percentage = Math.round((presentCount / total) * 100);
         setClassesHeld(total);
         setAttended(presentCount);
-        setAttendancePercent(percentage.toString());
+        setAttendancePercent(percentage);
 
-        // Attendance Math: Safe misses before dropping below 75%
-        // Formula: (Attended) / (Total + misses) >= 0.75  => misses <= (Attended / 0.75) - Total
-        const safeMisses = Math.floor((presentCount / 0.75) - total);
-        setLeavesRemaining(safeMisses > 0 ? safeMisses : 0);
+        // Safety: misses before dropping below 75%
+        const safe75 = Math.floor((presentCount / 0.75) - total);
+        setSafeMisses75(safe75 > 0 ? safe75 : 0);
+
+        // Safety: misses before dropping below 85%
+        const safe85 = Math.floor((presentCount / 0.85) - total);
+        setSafeMisses85(safe85 > 0 ? safe85 : 0);
+      } else {
+        setClassesHeld(0);
+        setAttended(0);
+        setAttendancePercent(0);
+        setSafeMisses75(0);
+        setSafeMisses85(0);
       }
 
-      // Load Events & Prioritize Display
-      const allEvents = getAllAcademicEvents();
-      if (allEvents.length === 0) {
-        setHasAnyEvents(false);
-        setUpcomingEvent(null);
+      // ────────────────────────────────────────────────────────
+      // 2. Per-Subject Breakdown
+      // ────────────────────────────────────────────────────────
+      const subjects = getSubjectWiseAttendance();
+      setSubjectData(subjects);
+
+      // ────────────────────────────────────────────────────────
+      // 3. Next Class & Current Class (real-time status)
+      // ────────────────────────────────────────────────────────
+      const active = getActiveClass(currentDay, currentTime);
+      if (active) {
+        setCurrentClass(active);
+        setVerificationStatus('scanning');
+        setNextClass(null);
       } else {
-        setHasAnyEvents(true);
+        setCurrentClass(null);
+        setVerificationStatus('idle');
+        const upcoming = getNextUpcomingClass(currentDay, currentTime);
+        setNextClass(upcoming);
+      }
+
+      // ────────────────────────────────────────────────────────
+      // 4. Upcoming Event & Semester Countdown
+      // ────────────────────────────────────────────────────────
+      const allEvents = getAllAcademicEvents();
+      if (allEvents.length > 0) {
         const futureEvents = allEvents.filter(e => e.date >= todayStr);
-        
-        let priorityEvent = null;
-
-        // 1. Look for the next Internal Exam first
-        priorityEvent = futureEvents.find(e => e.type === 'internal_exam');
-
-        // 2. Fallback to the absolute next event
-        if (!priorityEvent && futureEvents.length > 0) {
-            priorityEvent = futureEvents[0];
-        }
+        let priorityEvent = futureEvents.find(e => e.type === 'internal_exam');
+        if (!priorityEvent && futureEvents.length > 0) priorityEvent = futureEvents[0];
 
         if (priorityEvent) {
           setUpcomingEvent(priorityEvent);
-          
-          const eventDate = new Date(priorityEvent.date);
-          const today = new Date(todayStr);
-          const diffTime = Math.abs(eventDate - today);
-          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          const diffDays = Math.ceil(Math.abs(new Date(priorityEvent.date) - new Date(todayStr)) / 86400000);
           setDaysUntil(diffDays);
         } else {
           setUpcomingEvent(null);
         }
+      } else {
+        setUpcomingEvent(null);
       }
 
-      // Check Semester End Countdown
       const endMilestone = getAcademicMilestone('semester_end');
       const startMilestone = getAcademicMilestone('semester_start');
-
       if (startMilestone && endMilestone && todayStr >= startMilestone.date && todayStr <= endMilestone.date) {
-        const today = new Date(todayStr);
-        const endDate = new Date(endMilestone.date);
-        const diffTime = Math.abs(endDate - today);
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        const diffDays = Math.ceil(Math.abs(new Date(endMilestone.date) - new Date(todayStr)) / 86400000);
         setSemesterEndCountdown(diffDays);
       } else {
         setSemesterEndCountdown(null);
       }
-      
+
     } catch (err) {
-      console.log("No data yet or DB error:", err);
+      console.log("Dashboard analytics error:", err);
     }
   };
 
+  // ─── Helper: Color based on percentage ───
+  const getPercentColor = (pct) => {
+    if (pct >= 85) return '#2e7d32';
+    if (pct >= 75) return '#e65100';
+    return '#d32f2f';
+  };
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Welcome back!</Text>
-      
-      <View style={styles.statsContainer}>
-        <View style={styles.statBoxRow}>
-          <View style={styles.statBoxMain}>
-            <Text style={styles.statNumber}>{attendancePercent}%</Text>
-            <Text style={styles.statLabel}>Overall</Text>
-            <View style={styles.subStats}>
-              <Text style={styles.subStatText}>✓ {attended}</Text>
-              <Text style={styles.subStatText}>Total {classesHeld}</Text>
-            </View>
-          </View>
-          
-          <View style={[styles.statBoxMain, { backgroundColor: leavesRemaining > 0 ? '#e8f5e9' : '#ffebee' }]}>
-            <Text style={[styles.statNumber, { color: leavesRemaining > 0 ? '#2e7d32' : '#d32f2f' }]}>
-              {leavesRemaining}
+    <ScrollView 
+      style={styles.container} 
+      contentContainerStyle={styles.scrollContent}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4a6cf7" />}
+    >
+      {/* ═══ Real-Time Status Banner ═══ */}
+      {currentClass ? (
+        <View style={styles.statusBanner}>
+          <View style={styles.statusDot} />
+          <View style={styles.statusTextBox}>
+            <Text style={styles.statusLabel}>LIVE — Verifying</Text>
+            <Text style={styles.statusClass}>{currentClass.name}</Text>
+            <Text style={styles.statusDetail}>
+              {currentClass.class_type === 'lab' ? '🔬' : '📖'} {currentClass.start_time} - {currentClass.end_time} • Scanning Wi-Fi & GPS...
             </Text>
-            <Text style={styles.statLabel}>Safe Leaves</Text>
-            <View style={styles.subStats}>
-              <Text style={[styles.subStatText, { color: '#666' }]}>Before {'<'} 75%</Text>
-            </View>
+          </View>
+        </View>
+      ) : nextClass ? (
+        <View style={[styles.statusBanner, { backgroundColor: '#f0f4ff', borderColor: '#c5cae9' }]}>
+          <Text style={styles.nextClassEmoji}>{nextClass.class_type === 'lab' ? '🔬' : '📖'}</Text>
+          <View style={styles.statusTextBox}>
+            <Text style={[styles.statusLabel, { color: '#4a6cf7' }]}>NEXT CLASS</Text>
+            <Text style={[styles.statusClass, { color: '#1a1a2e' }]}>{nextClass.name}</Text>
+            <Text style={styles.statusDetail}>
+              {nextClass.isToday ? 'Today' : nextClass.nextDay || nextClass.day_of_week} at {nextClass.start_time}
+              {nextClass.room_name ? ` • ${nextClass.room_name}` : ''}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      {/* ═══ Overall Stats Row ═══ */}
+      <View style={styles.statsRow}>
+        <View style={styles.overallCard}>
+          <View style={styles.percentRing}>
+            <Text style={[styles.percentText, { color: getPercentColor(attendancePercent) }]}>
+              {attendancePercent}%
+            </Text>
+          </View>
+          <Text style={styles.overallLabel}>Overall</Text>
+          <Text style={styles.overallSub}>✓ {attended} / {classesHeld}</Text>
+        </View>
+
+        <View style={styles.safetyColumn}>
+          <View style={[styles.safetyCard, { backgroundColor: safeMisses75 > 0 ? '#e8f5e9' : '#ffebee' }]}>
+            <Text style={[styles.safetyNumber, { color: safeMisses75 > 0 ? '#2e7d32' : '#d32f2f' }]}>
+              {safeMisses75}
+            </Text>
+            <Text style={styles.safetyLabel}>Before {'<'} 75%</Text>
+          </View>
+          <View style={[styles.safetyCard, { backgroundColor: safeMisses85 > 0 ? '#e3f2fd' : '#fff3e0' }]}>
+            <Text style={[styles.safetyNumber, { color: safeMisses85 > 0 ? '#1565c0' : '#e65100' }]}>
+              {safeMisses85}
+            </Text>
+            <Text style={styles.safetyLabel}>Before {'<'} 85%</Text>
           </View>
         </View>
       </View>
 
-      {/* ─── Academic Calendar Section ─── */}
-      {!hasAnyEvents ? (
-        <TouchableOpacity 
-          style={styles.bannerContainer}
-          onPress={() => navigation.navigate('Calendar')}
-        >
-          <Text style={styles.bannerIcon}>📅</Text>
-          <View style={styles.bannerTextContainer}>
-            <Text style={styles.bannerTitle}>Help us stay accurate!</Text>
-            <Text style={styles.bannerSubtext}>
-              Upload your college's annual calendar to automatically pause attendance during fests and holidays.
-            </Text>
-          </View>
-        </TouchableOpacity>
-      ) : (
-        <View>
-          {upcomingEvent && (
-            <TouchableOpacity 
-              style={styles.upcomingCard}
-              onPress={() => navigation.navigate('Calendar')}
-            >
-              <View style={styles.upcomingHeader}>
-                <Text style={[
-                  styles.upcomingTitle, 
-                  upcomingEvent.type === 'internal_exam' && { color: '#e65100' }
-                ]}>
-                  {upcomingEvent.type === 'internal_exam' ? '🚨 Next Internal' : '🗓️ Upcoming Event'}
-                </Text>
-                <Text style={styles.upcomingDays}>
-                  {daysUntil === 0 ? 'Today!' : `in ${daysUntil} day${daysUntil > 1 ? 's' : ''}`}
+      {/* ═══ Per-Subject Attendance Bars ═══ */}
+      {subjectData.length > 0 && (
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>📊 Subject-Wise Attendance</Text>
+          {subjectData.map((subject, index) => (
+            <View key={index} style={styles.subjectRow}>
+              <View style={styles.subjectHeader}>
+                <Text style={styles.subjectName} numberOfLines={1}>{subject.name}</Text>
+                <Text style={[styles.subjectPercent, { color: getPercentColor(subject.percentage) }]}>
+                  {subject.percentage}%
                 </Text>
               </View>
-              <Text style={styles.upcomingName}>{upcomingEvent.title}</Text>
-              <Text style={styles.upcomingDate}>
-                {upcomingEvent.date} • {upcomingEvent.type === 'internal_exam' ? 'Internal Exam' : (upcomingEvent.is_holiday ? 'Holiday' : 'College Event')}
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          {!upcomingEvent && semesterEndCountdown !== null && (
-             <TouchableOpacity 
-               style={[styles.upcomingCard, { borderLeftColor: '#4caf50' }]}
-               onPress={() => navigation.navigate('Calendar')}
-             >
-               <View style={styles.upcomingHeader}>
-                 <Text style={[styles.upcomingTitle, { color: '#2e7d32' }]}>🏁 Semester Ending</Text>
-               </View>
-               <Text style={styles.upcomingName}>Days until Semester End</Text>
-               <Text style={[styles.upcomingDays, { fontSize: 24, marginTop: 10, color: '#4caf50' }]}>
-                  {semesterEndCountdown}
-               </Text>
-             </TouchableOpacity>
-          )}
+              <View style={styles.barTrack}>
+                <View 
+                  style={[
+                    styles.barFill, 
+                    { 
+                      width: `${Math.min(subject.percentage, 100)}%`,
+                      backgroundColor: getPercentColor(subject.percentage),
+                    }
+                  ]} 
+                />
+                {/* 75% marker line */}
+                <View style={styles.thresholdLine75} />
+              </View>
+              <Text style={styles.subjectCount}>{subject.attended}/{subject.total} classes</Text>
+            </View>
+          ))}
         </View>
       )}
 
-
-      <View style={styles.actionsContainer}>
+      {/* ═══ Upcoming Event / Semester Countdown ═══ */}
+      {upcomingEvent && (
         <TouchableOpacity 
-          style={styles.button}
-          onPress={() => navigation.navigate('Timetable')}
+          style={styles.eventCard}
+          onPress={() => navigation.navigate('Calendar')}
         >
-          <Text style={styles.buttonText}>View Timetable</Text>
+          <View style={styles.eventHeader}>
+            <Text style={[styles.eventType, upcomingEvent.type === 'internal_exam' && { color: '#e65100' }]}>
+              {upcomingEvent.type === 'internal_exam' ? '🚨 INTERNAL EXAM' : '🗓️ UPCOMING'}
+            </Text>
+            <Text style={styles.eventDays}>
+              {daysUntil === 0 ? 'Today!' : `in ${daysUntil}d`}
+            </Text>
+          </View>
+          <Text style={styles.eventName}>{upcomingEvent.title}</Text>
+          <Text style={styles.eventDate}>{upcomingEvent.date}</Text>
         </TouchableOpacity>
+      )}
 
-        <TouchableOpacity 
-          style={[styles.button, styles.primaryButton]}
-          onPress={() => navigation.navigate('Upload')}
-        >
-          <Text style={[styles.buttonText, styles.primaryButtonText]}>Add New Schedule</Text>
+      {semesterEndCountdown !== null && (
+        <View style={[styles.eventCard, { borderLeftColor: '#4caf50' }]}>
+          <Text style={[styles.eventType, { color: '#2e7d32' }]}>🏁 SEMESTER</Text>
+          <Text style={styles.eventName}>{semesterEndCountdown} days remaining</Text>
+        </View>
+      )}
+
+      {/* ═══ Quick Actions ═══ */}
+      <View style={styles.actionsRow}>
+        <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('Timetable')}>
+          <Text style={styles.actionEmoji}>📅</Text>
+          <Text style={styles.actionLabel}>Timetable</Text>
         </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.secondaryButton}
-          onPress={testNotification}
-        >
-          <Text style={styles.secondaryButtonText}>Test Background Notification 🔔</Text>
+        <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('Upload')}>
+          <Text style={styles.actionEmoji}>➕</Text>
+          <Text style={styles.actionLabel}>Upload</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('Calendar')}>
+          <Text style={styles.actionEmoji}>🗓️</Text>
+          <Text style={styles.actionLabel}>Calendar</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('Profile')}>
+          <Text style={styles.actionEmoji}>👤</Text>
+          <Text style={styles.actionLabel}>Profile</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 20,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f0f4ff',
   },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginBottom: 30,
-    color: '#333',
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 40,
   },
-  statsContainer: {
-    marginBottom: 40,
-  },
-  statBoxRow: {
+
+  // ─── Status Banner ───
+  statusBanner: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 15,
+    alignItems: 'center',
+    backgroundColor: '#e8f5e9',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#c8e6c9',
   },
-  statBoxMain: {
+  statusDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#4caf50',
+    marginRight: 14,
+  },
+  nextClassEmoji: {
+    fontSize: 28,
+    marginRight: 14,
+  },
+  statusTextBox: {
+    flex: 1,
+  },
+  statusLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#2e7d32',
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+  statusClass: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#1b5e20',
+    marginBottom: 2,
+  },
+  statusDetail: {
+    fontSize: 12,
+    color: '#666',
+  },
+
+  // ─── Stats Row ───
+  statsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  overallCard: {
     flex: 1,
     backgroundColor: '#fff',
     padding: 20,
-    borderRadius: 15,
+    borderRadius: 16,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  statNumber: {
-    fontSize: 38,
-    fontWeight: 'bold',
-    color: '#007AFF',
+  percentRing: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 4,
+    borderColor: '#e2e8f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
   },
-  statLabel: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 5,
-    fontWeight: '600',
+  percentText: {
+    fontSize: 24,
+    fontWeight: '800',
+  },
+  overallLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#888',
     textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  subStats: {
-    flexDirection: 'row',
-    marginTop: 15,
-    gap: 15,
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-    paddingTop: 15,
-    width: '100%',
+  overallSub: {
+    fontSize: 12,
+    color: '#aaa',
+    marginTop: 2,
+  },
+
+  // ─── Safety Cards ───
+  safetyColumn: {
+    gap: 10,
     justifyContent: 'center',
   },
-  subStatText: {
-    color: '#888',
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  // ─── Academic Calendar Styles ───
-  bannerContainer: {
-    backgroundColor: '#e3f2fd',
-    borderRadius: 15,
-    padding: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 25,
-    borderWidth: 1,
-    borderColor: '#bbdefb',
-  },
-  bannerIcon: {
-    fontSize: 32,
-    marginRight: 15,
-  },
-  bannerTextContainer: {
+  safetyCard: {
     flex: 1,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 120,
   },
-  bannerTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1565c0',
-    marginBottom: 4,
+  safetyNumber: {
+    fontSize: 28,
+    fontWeight: '800',
   },
-  bannerSubtext: {
-    fontSize: 13,
-    color: '#0d47a1',
-    lineHeight: 18,
+  safetyLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#888',
+    marginTop: 2,
   },
-  upcomingCard: {
+
+  // ─── Subject Bars ───
+  sectionCard: {
     backgroundColor: '#fff',
-    borderRadius: 15,
-    padding: 20,
-    marginBottom: 25,
-    borderLeftWidth: 4,
-    borderLeftColor: '#9c27b0',
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
-    shadowRadius: 4,
+    shadowRadius: 6,
     elevation: 2,
   },
-  upcomingHeader: {
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1a1a2e',
+    marginBottom: 16,
+  },
+  subjectRow: {
+    marginBottom: 14,
+  },
+  subjectHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 6,
   },
-  upcomingTitle: {
+  subjectName: {
     fontSize: 14,
-    fontWeight: 'bold',
-    color: '#888',
-    textTransform: 'uppercase',
+    fontWeight: '600',
+    color: '#333',
+    flex: 1,
+    marginRight: 10,
   },
-  upcomingDays: {
+  subjectPercent: {
     fontSize: 14,
-    fontWeight: 'bold',
-    color: '#ff3b30',
+    fontWeight: '800',
   },
-  upcomingName: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#222',
+  barTrack: {
+    height: 10,
+    backgroundColor: '#f0f0f5',
+    borderRadius: 5,
+    overflow: 'hidden',
+    position: 'relative',
   },
-  upcomingDate: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 5,
+  barFill: {
+    height: '100%',
+    borderRadius: 5,
+  },
+  thresholdLine75: {
+    position: 'absolute',
+    left: '75%',
+    top: 0,
+    bottom: 0,
+    width: 2,
+    backgroundColor: 'rgba(0,0,0,0.15)',
+  },
+  subjectCount: {
+    fontSize: 11,
+    color: '#aaa',
+    marginTop: 3,
   },
 
-  // ─── Actions ───
-  actionsContainer: {
-    gap: 15,
-  },
-  button: {
+  // ─── Event Card ───
+  eventCard: {
     backgroundColor: '#fff',
+    borderRadius: 14,
     padding: 16,
-    borderRadius: 12,
+    marginBottom: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#9c27b0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  eventHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  eventType: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#888',
+    letterSpacing: 0.5,
+  },
+  eventDays: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ff3b30',
+  },
+  eventName: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#1a1a2e',
+  },
+  eventDate: {
+    fontSize: 13,
+    color: '#888',
+    marginTop: 3,
+  },
+
+  // ─── Quick Actions ───
+  actionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  actionBtn: {
+    flex: 1,
+    backgroundColor: '#fff',
+    paddingVertical: 16,
+    borderRadius: 14,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: '#e8ecf4',
   },
-  primaryButton: {
-    backgroundColor: '#007AFF',
-    borderWidth: 0,
+  actionEmoji: {
+    fontSize: 24,
+    marginBottom: 6,
   },
-  buttonText: {
-    fontSize: 16,
+  actionLabel: {
+    fontSize: 11,
     fontWeight: '600',
-    color: '#333',
-  },
-  primaryButtonText: {
-    color: '#fff',
-  },
-  secondaryButton: {
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  secondaryButtonText: {
     color: '#666',
-    fontWeight: '500',
-  }
-
+  },
 });
