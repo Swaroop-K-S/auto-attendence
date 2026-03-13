@@ -10,14 +10,14 @@ const GEMINI_API_KEY = 'AIzaSyC6C5Qg28eX1WS2w-a5gIDY91ogPkxBZ8o';
 
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
-const TIMETABLE_PROMPT = `You are a timetable extraction assistant. Analyze this image of a class/university timetable and extract ALL classes you can find.
+const TIMETABLE_PROMPT = `You are a highly precise timetable extraction assistant. Analyze this academic document (which may be a screenshot, PDF page, or blurry photo) of a class/university timetable and extract ALL classes you can find.
 
-Return ONLY a valid JSON array. Each object must have these exact keys:
+Return ONLY a valid JSON array. Each object must have these exact keys. If a field is completely illegible due to blur or crop, mark its value as null for manual user correction later.
 - "name": The class/subject name (string)
 - "day": The day of the week, fully spelled out like "Monday", "Tuesday", etc. (string)
 - "start_time": Start time in 24-hour "HH:mm" format (string)
 - "end_time": End time in 24-hour "HH:mm" format (string)  
-- "room": The room number or location if visible, otherwise empty string (string)
+- "room": The room number or location if visible, otherwise empty string (string) or null if illegible
 - "type": Either "lab" or "theory" (string). Use these rules to classify:
   * "lab" — if the name contains keywords like: Lab, Practical, P-, L-, Workshop, Studio, Sessional, or if the room mentions "Lab"
   * "theory" — for all other classes (lectures, tutorials, seminars)
@@ -26,8 +26,7 @@ Return ONLY a valid JSON array. Each object must have these exact keys:
 Example output:
 [
   {"name": "Computer Networks", "day": "Monday", "start_time": "09:00", "end_time": "10:00", "room": "B108", "type": "theory"},
-  {"name": "Machine Learning Lab", "day": "Monday", "start_time": "11:15", "end_time": "13:15", "room": "Lab B1", "type": "lab"},
-  {"name": "P-Data Structures", "day": "Tuesday", "start_time": "14:00", "end_time": "16:00", "room": "CS Lab 2", "type": "lab"}
+  {"name": null, "day": "Tuesday", "start_time": "14:00", "end_time": "16:00", "room": "CS Lab 2", "type": "lab"}
 ]
 
 IMPORTANT RULES:
@@ -35,7 +34,7 @@ IMPORTANT RULES:
 2. If time is in 12-hour format, convert to 24-hour.
 3. Extract every single class from every day visible in the timetable.
 4. If a class spans multiple days, create separate entries for each day.
-5. If you cannot read a field clearly, make your best guess.
+5. If you cannot read a field clearly, mark it as null rather than making wild guesses.
 6. Pay special attention to classifying labs correctly — labs typically have longer durations (2-3 hours) and contain keywords listed above.`;
 
 /**
@@ -133,7 +132,7 @@ export async function parseTimetableImage(base64Image, mimeType = 'image/jpeg') 
   });
 }
 
-const ACADEMIC_CALENDAR_PROMPT = `Analyze this document which is a college annual calendar. Extract every significant date, holiday, exam start date, and college fest. 
+const ACADEMIC_CALENDAR_PROMPT = `Analyze this academic document (which may be a screenshot, PDF page, or blurry photo) which represents a college annual calendar. Extract every significant date, holiday, exam start date, and college fest. 
 
 When analyzing the annual calendar, pay special attention to:
 - Internals: Look for keywords like 'CIE', 'Internals', 'Mid-Term', or 'IA'.
@@ -142,18 +141,19 @@ When analyzing the annual calendar, pay special attention to:
 Return Format: Ensure these are categorized in the JSON output under a "type" field using the tags: "internal_exam", "semester_start", or "semester_end". 
 For other events, use "holiday", "exam", or "college_event".
 
-Return the data as a clean JSON array: 
+Return the data as a clean JSON array with high precision. If a title or specific date is completely illegible due to blur, mark it as null for manual user correction.
 [
   {"title": "Diwali", "date": "2026-11-01", "type": "holiday"}, 
   {"title": "Commencement of Classes", "date": "2026-08-01", "type": "semester_start"},
   {"title": "Internal Assessment 1", "date": "2026-09-15", "type": "internal_exam"},
-  {"title": "Last Working Day", "date": "2026-12-10", "type": "semester_end"}
+  {"title": null, "date": "2026-12-10", "type": "semester_end"}
 ]
 
 IMPORTANT RULES:
 1. Return ONLY the JSON array, no markdown, no explanation, no code fences.
 2. Ensure dates are strictly YYYY-MM-DD. If year is not mentioned, infer it from the calendar context.
-3. If it's a date range, include it as multiple single days OR just the start date if multiple days is too complex, prefer multiple individual days.`;
+3. If it's a date range, include it as multiple single days OR just the start date if multiple days is too complex, prefer multiple individual days.
+4. If a field is completely illegible, set its value to null.`;
 
 /**
  * Sends a base64 image of an academic calendar to Gemini Vision API and returns parsed events.
