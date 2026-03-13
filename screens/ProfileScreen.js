@@ -29,7 +29,8 @@ export default function ProfileScreen({ navigation }) {
           </Text>
         </View>
         <Text style={styles.name}>{user?.name || 'Student'}</Text>
-        {user?.email ? <Text style={styles.email}>{user.email}</Text> : null}
+        {user?.srn ? <Text style={styles.subtext}>SRN: {user.srn}</Text> : null}
+        {user?.branch ? <Text style={styles.subtext}>{user.branch}</Text> : null}
       </View>
 
       <View style={styles.infoSection}>
@@ -105,7 +106,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
   },
-  email: {
+  subtext: {
     fontSize: 14,
     color: '#888',
     marginTop: 4,

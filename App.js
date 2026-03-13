@@ -109,13 +109,17 @@ function DrawerNavigator() {
  * Root component that decides between Login and Main app based on auth state.
  */
 function AppRoot() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
 
   useEffect(() => {
     // Initialize DB and background engine on app start
     initDB();
     registerBackgroundValidationTask();
   }, []);
+
+  if (loading) {
+    return null; // Don't render anything until auth state is loaded from AsyncStorage
+  }
 
   return (
     <NavigationContainer>
