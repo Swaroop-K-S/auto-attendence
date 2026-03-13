@@ -37,6 +37,11 @@ export const initDB = () => {
         type TEXT NOT NULL,
         is_holiday BOOLEAN DEFAULT 0
       );
+
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      );
     `);
 
     // ─── Migration: Add new columns if upgrading from old schema ──────
@@ -57,6 +62,18 @@ export const initDB = () => {
         )
       `);
     } catch(e) { console.log('Migration for academic_events failed', e); }
+
+    // ─── Migration: Create settings if it doesn't exist ───────────────
+    try {
+      db.execSync(`
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT
+        )
+      `);
+      // Seed default Saturday logic to point to 'Monday'
+      db.runSync(`INSERT OR IGNORE INTO settings (key, value) VALUES ('saturday_logic', 'Monday')`);
+    } catch(e) { console.log('Migration for settings failed', e); }
 
     // ─── Seed Sample Data ─────────────────────────────────────────────
     const count = db.getAllSync("SELECT COUNT(*) as count FROM classes")[0].count;

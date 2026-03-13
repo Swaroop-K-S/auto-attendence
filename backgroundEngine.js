@@ -99,7 +99,25 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
     }
 
     // ── Step 1: Find an active class ────────────────────────────────
-    const activeClass = getActiveClass(currentDay, currentTime);
+    let targetDay = currentDay;
+
+    // ── Alternate Saturday Logic ──
+    if (currentDay === 'Saturday') {
+      const dateNum = now.getDate();
+      const weekNum = Math.ceil(dateNum / 7);
+
+      if (weekNum === 1 || weekNum === 3) {
+        console.log(`[BG Engine] Skipping: Week ${weekNum} Saturday is a holiday.`);
+        return BackgroundFetch.BackgroundFetchResult.NoData;
+      } else {
+        const db = getDBConnection();
+        const satLogic = db.getFirstSync("SELECT value FROM settings WHERE key = 'saturday_logic'") || { value: 'Monday' };
+        targetDay = satLogic.value;
+        console.log(`[BG Engine] Alternate Saturday (Week ${weekNum}): Following ${targetDay} timetable.`);
+      }
+    }
+
+    const activeClass = getActiveClass(targetDay, currentTime);
 
     if (!activeClass) {
       console.log("[BG Engine] No active class. Sleeping.");
@@ -182,7 +200,7 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
     }
 
     // ── Step 6: First-time attendance marking ───────────────────────
-    if (distance < threshold.presentRadius) {
+    if (distance < threshold.presentRadius && wifiMatch) {
       db.runSync(
         `INSERT INTO attendance_logs (class_id, date, status, marked_at, session_end_status, last_verified_at) VALUES (?, ?, ?, ?, ?, ?)`,
         [activeClass.id, todayDate, 'Present', now.toISOString(), 'Completed', now.toISOString()]
@@ -190,21 +208,22 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
       await sendNotification(
         "✅ Attendance Marked!",
         `${typeLabel} ${activeClass.name} — Present! ` +
-        `Distance: ${distance.toFixed(0)}m${wifiMatch ? ' | Wi-Fi ✓' : ''}\n` +
+        `Distance & Wi-Fi Matched ✓\n` +
         `We'll continue verifying every 15 minutes until class ends.`
       );
-      console.log(`[BG Engine] PRESENT: ${activeClass.name} (${distance.toFixed(0)}m < ${threshold.presentRadius}m)`);
+      console.log(`[BG Engine] PRESENT: ${activeClass.name} (${distance.toFixed(0)}m & Wi-Fi Matched)`);
     } else {
+      let failureReason = distance >= threshold.presentRadius ? `Too far (${distance.toFixed(0)}m)` : 'Wi-Fi Mismatch';
+      
       db.runSync(
         `INSERT INTO attendance_logs (class_id, date, status, marked_at, session_end_status) VALUES (?, ?, ?, ?, ?)`,
         [activeClass.id, todayDate, 'Absent', now.toISOString(), 'N/A']
       );
       await sendNotification(
-        "❌ Too Far From Class",
-        `${typeLabel} ${activeClass.name} — You are ${distance.toFixed(0)}m away ` +
-        `(need to be within ${threshold.presentRadius}m). Marked as Absent.`
+        "❌ Verification Failed",
+        `${typeLabel} ${activeClass.name} — ${failureReason}. Marked as Absent.`
       );
-      console.log(`[BG Engine] ABSENT: ${activeClass.name} (${distance.toFixed(0)}m > ${threshold.presentRadius}m)`);
+      console.log(`[BG Engine] ABSENT: ${activeClass.name} (${failureReason})`);
     }
 
     return BackgroundFetch.BackgroundFetchResult.NewData;

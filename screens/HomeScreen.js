@@ -17,6 +17,7 @@ export default function HomeScreen({ navigation }) {
   const [attendancePercent, setAttendancePercent] = useState('0');
   const [classesHeld, setClassesHeld] = useState(0);
   const [attended, setAttended] = useState(0);
+  const [leavesRemaining, setLeavesRemaining] = useState(0);
 
   // Calendar Event States
   const [upcomingEvent, setUpcomingEvent] = useState(null);
@@ -49,6 +50,11 @@ export default function HomeScreen({ navigation }) {
         setClassesHeld(total);
         setAttended(presentCount);
         setAttendancePercent(percentage.toString());
+
+        // Attendance Math: Safe misses before dropping below 75%
+        // Formula: (Attended) / (Total + misses) >= 0.75  => misses <= (Attended / 0.75) - Total
+        const safeMisses = Math.floor((presentCount / 0.75) - total);
+        setLeavesRemaining(safeMisses > 0 ? safeMisses : 0);
       }
 
       // Load Events & Prioritize Display
@@ -109,12 +115,24 @@ export default function HomeScreen({ navigation }) {
       <Text style={styles.title}>Welcome back!</Text>
       
       <View style={styles.statsContainer}>
-        <View style={styles.statBox}>
-          <Text style={styles.statNumber}>{attendancePercent}%</Text>
-          <Text style={styles.statLabel}>Overall Attendance</Text>
-          <View style={styles.subStats}>
-            <Text style={styles.subStatText}>Attended: {attended}</Text>
-            <Text style={styles.subStatText}>Total: {classesHeld}</Text>
+        <View style={styles.statBoxRow}>
+          <View style={styles.statBoxMain}>
+            <Text style={styles.statNumber}>{attendancePercent}%</Text>
+            <Text style={styles.statLabel}>Overall</Text>
+            <View style={styles.subStats}>
+              <Text style={styles.subStatText}>✓ {attended}</Text>
+              <Text style={styles.subStatText}>Total {classesHeld}</Text>
+            </View>
+          </View>
+          
+          <View style={[styles.statBoxMain, { backgroundColor: leavesRemaining > 0 ? '#e8f5e9' : '#ffebee' }]}>
+            <Text style={[styles.statNumber, { color: leavesRemaining > 0 ? '#2e7d32' : '#d32f2f' }]}>
+              {leavesRemaining}
+            </Text>
+            <Text style={styles.statLabel}>Safe Leaves</Text>
+            <View style={styles.subStats}>
+              <Text style={[styles.subStatText, { color: '#666' }]}>Before {'<'} 75%</Text>
+            </View>
           </View>
         </View>
       </View>
@@ -217,7 +235,13 @@ const styles = StyleSheet.create({
   statsContainer: {
     marginBottom: 40,
   },
-  statBox: {
+  statBoxRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 15,
+  },
+  statBoxMain: {
+    flex: 1,
     backgroundColor: '#fff',
     padding: 20,
     borderRadius: 15,
@@ -229,20 +253,21 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   statNumber: {
-    fontSize: 48,
+    fontSize: 38,
     fontWeight: 'bold',
     color: '#007AFF',
   },
   statLabel: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#666',
     marginTop: 5,
-    fontWeight: '500',
+    fontWeight: '600',
+    textTransform: 'uppercase',
   },
   subStats: {
     flexDirection: 'row',
     marginTop: 15,
-    gap: 20,
+    gap: 15,
     borderTopWidth: 1,
     borderTopColor: '#eee',
     paddingTop: 15,
@@ -251,7 +276,8 @@ const styles = StyleSheet.create({
   },
   subStatText: {
     color: '#888',
-    fontSize: 14,
+    fontSize: 13,
+    fontWeight: '500',
   },
   // ─── Academic Calendar Styles ───
   bannerContainer: {
