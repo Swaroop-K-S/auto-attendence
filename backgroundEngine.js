@@ -130,36 +130,41 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
 
     console.log(`[BG Engine] Active: ${activeClass.name} (${typeLabel}) | Radius: ${threshold.presentRadius}m present / ${threshold.earlyLeaveRadius}m leave`);
 
-    // ── Step 2: Get current location ────────────────────────────────
+    // ── Step A (Time): Already verified — activeClass is the current class ─
+
+    // ── Step B (GPS): Get current location ──────────────────────────
     const location = await Location.getCurrentPositionAsync({
       accuracy: threshold.accuracy,
     });
 
-    // ── Step 3: Anti-Spoofing ───────────────────────────────────────
+    // ── Step B.1: Anti-Spoofing ─────────────────────────────────────
+    // If location.mocked is true, flag as "Manual Verification Required"
     if (location.mocked) {
-      console.log("[BG Engine] SPOOFING DETECTED!");
+      console.log("[BG Engine] MOCK LOCATION DETECTED — flagging for manual verification.");
       const db = getDBConnection();
       const profile = getUserProfile();
       const studentSrn = activeClass.student_srn || profile?.srn || '';
       db.runSync(
         `INSERT INTO attendance_logs (class_id, student_srn, date, status, marked_at, session_end_status) VALUES (?, ?, ?, ?, ?, ?)`,
-        [activeClass.id, studentSrn, todayDate, 'Spoofed', now.toISOString(), 'Spoofed']
+        [activeClass.id, studentSrn, todayDate, 'Manual Verification Required', now.toISOString(), 'Flagged']
       );
       await sendNotification(
-        "⚠️ Spoofing Detected",
-        `Mock location detected for ${activeClass.name}. Marked as Spoofed.`
+        "⚠️ Manual Verification Required",
+        `Mock location detected for ${activeClass.name}. Your attendance has been flagged for manual verification.`
       );
       return BackgroundFetch.BackgroundFetchResult.NewData;
     }
 
-    // ── Step 4: Calculate distance ──────────────────────────────────
+    // ── Step B.2: Calculate Haversine distance ──────────────────────
     const distance = getDistance(
       location.coords.latitude, location.coords.longitude,
       activeClass.anchor_lat, activeClass.anchor_lng
     );
+
+    // ── Step C (Network): Check Wi-Fi BSSID match ──────────────────
     const wifiMatch = await checkWifiMatch(activeClass.anchor_wifi_bssid);
 
-    console.log(`[BG Engine] Distance: ${distance.toFixed(1)}m | GPS accuracy: ${location.coords.accuracy?.toFixed(1)}m | Wi-Fi: ${wifiMatch ? '✓' : '✗'}`);
+    console.log(`[BG Engine] Verification: Distance=${distance.toFixed(1)}m | GPS accuracy=${location.coords.accuracy?.toFixed(1)}m | Wi-Fi=${wifiMatch ? '✓' : '✗'}`);
 
     const db = getDBConnection();
 
@@ -197,38 +202,62 @@ TaskManager.defineTask(BACKGROUND_VALIDATION_TASK, async () => {
           console.log(`[BG Engine] EARLY LEAVE: ${activeClass.name} (${distance.toFixed(0)}m > ${threshold.earlyLeaveRadius}m)`);
         }
       }
-      // If status is 'Absent' or 'Spoofed', don't re-check
+      // If status is 'Absent', 'Manual Verification Required', etc. — don't re-check
       return BackgroundFetch.BackgroundFetchResult.NewData;
     }
 
-    // ── Step 6: First-time attendance marking ───────────────────────
+    // ═══════════════════════════════════════════════════════════════
+    // FIRST-TIME ATTENDANCE MARKING — 3-Step Verification Result
+    // ═══════════════════════════════════════════════════════════════
     const profile = getUserProfile();
     const studentSrn = activeClass.student_srn || profile?.srn || '';
 
-    if (distance < threshold.presentRadius && wifiMatch) {
+    const gpsOk = distance < threshold.presentRadius;
+
+    if (gpsOk && wifiMatch) {
+      // ✅ ALL CHECKS PASSED — Mark as Present
       db.runSync(
         `INSERT INTO attendance_logs (class_id, student_srn, date, status, marked_at, session_end_status, last_verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [activeClass.id, studentSrn, todayDate, 'Present', now.toISOString(), 'Completed', now.toISOString()]
       );
       await sendNotification(
         "✅ Attendance Marked!",
-        `${typeLabel} ${activeClass.name} — Present! ` +
-        `Distance & Wi-Fi Matched ✓\n` +
-        `We'll continue verifying every 15 minutes until class ends.`
+        `${typeLabel} ${activeClass.name} — Present!\n` +
+        `✓ GPS: ${distance.toFixed(0)}m (within ${threshold.presentRadius}m)\n` +
+        `✓ Wi-Fi: Matched\n` +
+        `We'll re-verify every 15 minutes.`
       );
-      console.log(`[BG Engine] PRESENT: ${activeClass.name} (${distance.toFixed(0)}m & Wi-Fi Matched)`);
+      console.log(`[BG Engine] ✓ PRESENT: ${activeClass.name} (${distance.toFixed(0)}m & Wi-Fi OK)`);
+
+    } else if (gpsOk && !wifiMatch) {
+      // ⚠️ FRAUD DETECTION: GPS matches but Wi-Fi doesn't
+      // This is suspicious — student might be nearby but outside the actual classroom
+      db.runSync(
+        `INSERT INTO attendance_logs (class_id, student_srn, date, status, marked_at, session_end_status) VALUES (?, ?, ?, ?, ?, ?)`,
+        [activeClass.id, studentSrn, todayDate, 'Manual Verification Required', now.toISOString(), 'Flagged']
+      );
+      await sendNotification(
+        "⚠️ Manual Verification Required",
+        `${typeLabel} ${activeClass.name}\n` +
+        `✓ GPS: ${distance.toFixed(0)}m (within range)\n` +
+        `✗ Wi-Fi: Does NOT match anchor BSSID\n\n` +
+        `Your attendance has been flagged. Please connect to the classroom Wi-Fi or ask your teacher to verify.`
+      );
+      console.log(`[BG Engine] ⚠️ FLAGGED: ${activeClass.name} — GPS OK but Wi-Fi mismatch`);
+
     } else {
-      let failureReason = distance >= threshold.presentRadius ? `Too far (${distance.toFixed(0)}m)` : 'Wi-Fi Mismatch';
-      
+      // ❌ GPS too far — Mark as Absent
       db.runSync(
         `INSERT INTO attendance_logs (class_id, student_srn, date, status, marked_at, session_end_status) VALUES (?, ?, ?, ?, ?, ?)`,
         [activeClass.id, studentSrn, todayDate, 'Absent', now.toISOString(), 'N/A']
       );
       await sendNotification(
         "❌ Verification Failed",
-        `${typeLabel} ${activeClass.name} — ${failureReason}. Marked as Absent.`
+        `${typeLabel} ${activeClass.name}\n` +
+        `✗ GPS: ${distance.toFixed(0)}m (beyond ${threshold.presentRadius}m)\n` +
+        `Marked as Absent.`
       );
-      console.log(`[BG Engine] ABSENT: ${activeClass.name} (${failureReason})`);
+      console.log(`[BG Engine] ✗ ABSENT: ${activeClass.name} (${distance.toFixed(0)}m > ${threshold.presentRadius}m)`);
     }
 
     return BackgroundFetch.BackgroundFetchResult.NewData;
