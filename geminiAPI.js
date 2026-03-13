@@ -133,25 +133,27 @@ export async function parseTimetableImage(base64Image, mimeType = 'image/jpeg') 
   });
 }
 
-const ACADEMIC_CALENDAR_PROMPT = `Analyze this document which is a college annual calendar. Extract every significant date, holiday, exam start date, college fest, and key semester milestones. 
+const ACADEMIC_CALENDAR_PROMPT = `Analyze this document which is a college annual calendar. Extract every significant date, holiday, exam start date, and college fest. 
+
+When analyzing the annual calendar, pay special attention to:
+- Internals: Look for keywords like 'CIE', 'Internals', 'Mid-Term', or 'IA'.
+- Semester Boundaries: Identify 'Commencement of Classes' (Semester Start) and 'Last Working Day' (Semester End).
+
+Return Format: Ensure these are categorized in the JSON output under a "type" field using the tags: "internal_exam", "semester_start", or "semester_end". 
+For other events, use "holiday", "exam", or "college_event".
 
 Return the data as a clean JSON array: 
 [
   {"title": "Diwali", "date": "2026-11-01", "type": "holiday"}, 
-  {"title": "Commencement of ODD Semester", "date": "2026-08-01", "type": "semester_start"},
+  {"title": "Commencement of Classes", "date": "2026-08-01", "type": "semester_start"},
   {"title": "Internal Assessment 1", "date": "2026-09-15", "type": "internal_exam"},
   {"title": "Last Working Day", "date": "2026-12-10", "type": "semester_end"}
 ]
 
-Ensure dates are in YYYY-MM-DD format. Type MUST be one of: "holiday", "college_event", "exam", "internal_exam", "semester_start", or "semester_end".
-
 IMPORTANT RULES:
 1. Return ONLY the JSON array, no markdown, no explanation, no code fences.
 2. Ensure dates are strictly YYYY-MM-DD. If year is not mentioned, infer it from the calendar context.
-3. If it's a date range, include it as multiple single days OR just the start date if multiple days is too complex, prefer multiple individual days.
-4. "internal_exam" applies to IA, CIE, CAT, Mid-terms, or unit tests.
-5. "semester_start" applies to Induction, Commencement of classes, or Re-opening.
-6. "semester_end" applies to Last working day or End of classes.`;
+3. If it's a date range, include it as multiple single days OR just the start date if multiple days is too complex, prefer multiple individual days.`;
 
 /**
  * Sends a base64 image of an academic calendar to Gemini Vision API and returns parsed events.
