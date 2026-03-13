@@ -42,6 +42,7 @@ export default function HomeScreen({ navigation }) {
     try {
       const db = getDBConnection();
       const history = db.getAllSync("SELECT status FROM attendance_logs");
+      const todayStr = new Date().toISOString().split('T')[0];
       
       const total = history.length;
       if (total > 0) {
@@ -64,7 +65,6 @@ export default function HomeScreen({ navigation }) {
         setUpcomingEvent(null);
       } else {
         setHasAnyEvents(true);
-        const todayStr = new Date().toISOString().split('T')[0];
         const futureEvents = allEvents.filter(e => e.date >= todayStr);
         
         let priorityEvent = null;
@@ -93,7 +93,6 @@ export default function HomeScreen({ navigation }) {
       // Check Semester End Countdown
       const endMilestone = getAcademicMilestone('semester_end');
       const startMilestone = getAcademicMilestone('semester_start');
-      const todayStr = new Date().toISOString().split('T')[0];
 
       if (startMilestone && endMilestone && todayStr >= startMilestone.date && todayStr <= endMilestone.date) {
         const today = new Date(todayStr);

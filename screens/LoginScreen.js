@@ -83,7 +83,18 @@ export default function LoginScreen() {
   const processTimetable = async () => {
     await uploadAndProcess(
       parseTimetableImage,
-      (cls) => saveUserClass(cls, 'local_user'),
+      (cls) => {
+        // Map Gemini output keys → database column names
+        const mapped = {
+          name: cls.name || 'Unnamed Class',
+          day_of_week: cls.day || 'Monday',
+          start_time: cls.start_time || '09:00',
+          end_time: cls.end_time || '10:00',
+          room_name: cls.room || '',
+          class_type: cls.type || 'theory',
+        };
+        saveUserClass(mapped, 'local_user');
+      },
       "Timetable successfully saved!",
       3
     );
@@ -92,14 +103,22 @@ export default function LoginScreen() {
   const processCalendar = async () => {
     await uploadAndProcess(
       parseAnnualCalendar,
-      (evt) => addAcademicEvent(evt),
+      (evt) => {
+        // Handle null titles from AI (illegible fields)
+        const mapped = {
+          title: evt.title || 'Unknown Event',
+          date: evt.date || new Date().toISOString().split('T')[0],
+          type: evt.type || 'college_event',
+        };
+        addAcademicEvent(mapped);
+      },
       "Academic calendar successfully synced!",
       'finish'
     );
   };
 
   const skipToStep3 = () => setStep(3);
-  const skipAndFinish = () => login(name.trim(), srn.trim(), branch.trim());
+  const skipAndFinish = async () => await login(name.trim(), srn.trim(), branch.trim());
 
   if (loading) {
     return (
